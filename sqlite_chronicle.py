@@ -1,4 +1,5 @@
 import sqlite3
+import textwrap
 
 
 class ChronicleError(Exception):
@@ -33,14 +34,14 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str):
 
     with conn:
         c.execute(
-            f"""
+            textwrap.dedent(f"""
             CREATE TABLE "_chronicle_{table_name}" (
                 {pk_def},
                 updated_ms INTEGER,
                 deleted INTEGER DEFAULT 0,
                 PRIMARY KEY ({', '.join([f'"{col[0]}"' for col in primary_key_columns])})
             );
-        """
+        """)
         )
 
         # Populate the _chronicle_ table with existing rows from the original table
@@ -77,7 +78,8 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str):
             BEGIN
                 UPDATE "_chronicle_{table_name}"
                 SET updated_ms = {current_time_expr},
-                    {', '.join([f'"{col[0]}" = NEW."{col[0]}"' for col in primary_key_columns])}
+                -- Also update primary key columns if they have changed:
+                {', '.join([f'"{col[0]}" = NEW."{col[0]}"' for col in primary_key_columns])}
                 WHERE { ' AND '.join([f'"{col[0]}" = OLD."{col[0]}"' for col in primary_key_columns]) };
             END;
         """
