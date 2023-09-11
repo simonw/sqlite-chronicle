@@ -1,6 +1,6 @@
 import pytest
 import sqlite_utils
-import sqlite_chronicle
+from sqlite_chronicle import enable_chronicle
 import time
 from unittest.mock import ANY
 
@@ -17,7 +17,7 @@ def test_enable_chronicle(table_name, pks):
         ],
         pk=pks[0] if len(pks) == 1 else pks,
     )
-    sqlite_chronicle.enable_chronicle(db.conn, table_name)
+    enable_chronicle(db.conn, table_name)
     # It should have the same primary keys
     assert db[chronicle_table].pks == pks
     # Should also have updated_ms and deleted columns
@@ -36,7 +36,7 @@ def test_enable_chronicle(table_name, pks):
         ]
     assert list(db[chronicle_table].rows) == expected
     # Running it again should do nothing because table exists
-    sqlite_chronicle.enable_chronicle(db.conn, table_name)
+    enable_chronicle(db.conn, table_name)
     # Insert a row
     db[table_name].insert({"id": 3, "name": "Mango", "color": "orange"})
     get_by = 3 if pks == ["id"] else (3, "Mango")
@@ -56,4 +56,12 @@ def test_enable_chronicle(table_name, pks):
     db[table_name].delete(get_by)
     assert db[table_name].count == 2
     assert db[chronicle_table].get(get_by)["deleted"] == 1
-    assert db[chronicle_table].get(get_by)["updated_ms"] > record_timestamp
+    new_record_timestamp = db[chronicle_table].get(get_by)["updated_ms"]
+    assert new_record_timestamp > record_timestamp
+    # Now update a column that's part of the compound primary key
+    if pks == ["id", "name"]:
+        time.sleep(0.1)
+        db[table_name].update((2, "Pancakes"), {"name": "Pancakes the corgi"})
+        # This should have renamed the row in the chronicle table as well
+        renamed_row = db[chronicle_table].get((2, "Pancakes the corgi"))
+        assert renamed_row["updated_ms"] > record_timestamp

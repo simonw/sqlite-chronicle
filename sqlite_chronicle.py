@@ -76,8 +76,9 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str):
             FOR EACH ROW
             BEGIN
                 UPDATE "_chronicle_{table_name}"
-                SET updated_ms = {current_time_expr}
-                WHERE { ' AND '.join([f'"{col[0]}" = NEW."{col[0]}"' for col in primary_key_columns]) };
+                SET updated_ms = {current_time_expr},
+                    {', '.join([f'"{col[0]}" = NEW."{col[0]}"' for col in primary_key_columns])}
+                WHERE { ' AND '.join([f'"{col[0]}" = OLD."{col[0]}"' for col in primary_key_columns]) };
             END;
         """
         )
