@@ -34,14 +34,22 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str):
 
     with conn:
         c.execute(
-            textwrap.dedent(f"""
+            textwrap.dedent(
+                f"""
             CREATE TABLE "_chronicle_{table_name}" (
                 {pk_def},
                 updated_ms INTEGER,
                 deleted INTEGER DEFAULT 0,
                 PRIMARY KEY ({', '.join([f'"{col[0]}"' for col in primary_key_columns])})
             );
-        """)
+        """
+            )
+        )
+        # Add an index on the updated_ms column
+        c.execute(
+            f"""
+            CREATE INDEX "_chronicle_{table_name}_updated_ms" ON "_chronicle_{table_name}" (updated_ms);
+        """.strip()
         )
 
         # Populate the _chronicle_ table with existing rows from the original table

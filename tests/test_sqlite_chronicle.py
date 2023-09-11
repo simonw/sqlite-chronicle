@@ -59,9 +59,15 @@ def test_enable_chronicle(table_name, pks):
     new_record_timestamp = db[chronicle_table].get(get_by)["updated_ms"]
     assert new_record_timestamp > record_timestamp
     # Now update a column that's part of the compound primary key
+    time.sleep(0.1)
     if pks == ["id", "name"]:
-        time.sleep(0.1)
         db[table_name].update((2, "Pancakes"), {"name": "Pancakes the corgi"})
         # This should have renamed the row in the chronicle table as well
         renamed_row = db[chronicle_table].get((2, "Pancakes the corgi"))
+        assert renamed_row["updated_ms"] > record_timestamp
+    else:
+        # Update single primary key
+        db[table_name].update(2, {"id": 4})
+        # This should have renamed the row in the chronicle table as well
+        renamed_row = db[chronicle_table].get(4)
         assert renamed_row["updated_ms"] > record_timestamp
