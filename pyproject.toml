@@ -1,0 +1,19 @@
+[project]
+name = "sqlite-chronicle"
+version = "0.1"
+description = "Use triggers to maintain a chronicle table of updated/deleted timestamps in SQLite"
+readme = "README.md"
+authors = [{name = "Simon Willison"}]
+license = {text = "Apache-2.0"}
+classifiers = [
+    "License :: OSI Approved :: Apache Software License"
+]
+
+[project.urls]
+Homepage = "https://github.com/simonw/sqlite-chronicle"
+Changelog = "https://github.com/simonw/sqlite-chronicle/releases"
+Issues = "https://github.com/simonw/sqlite-chronicle/issues"
+CI = "https://github.com/simonw/sqlite-chronicle/actions"
+
+[project.optional-dependencies]
+test = ["pytest", "sqlite-utils"]
