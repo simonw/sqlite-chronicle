@@ -24,6 +24,8 @@ def test_enable_chronicle(table_name, pks):
     assert set(db[chronicle_table].columns_dict.keys()) == set(
         pks + ["updated_ms", "deleted"]
     )
+    # With an index
+    assert db[chronicle_table].indexes[0].columns == ["updated_ms"]
     if pks == ["id"]:
         expected = [
             {"id": 1, "updated_ms": ANY, "deleted": 0},
