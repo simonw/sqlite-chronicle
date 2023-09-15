@@ -45,24 +45,24 @@ def push_database(db_path, url, key=None, since=None):
             if change.version >= max_version:
                 max_version = change.version
 
-    if changes:
-        create_url = f"{url}/-/create"
-        json_body = {
-            "table": "creatures",
-            "rows": [change.row for change in changes],
-            "pk": "id",
-            "replace": True,
-        }
-        print(json_body)
+        if changes:
+            create_url = f"{url}/-/create"
+            json_body = {
+                "table": "creatures",
+                "rows": [change.row for change in changes],
+                "pk": "id",
+                "replace": True,
+            }
+            print(json_body)
 
-        response = httpx.post(create_url, json=json_body, headers=headers)
-        response.raise_for_status()
+            response = httpx.post(create_url, json=json_body, headers=headers)
+            response.raise_for_status()
 
-        with db.conn:
-            last_sync_table.upsert({"url": url, "last_sync": max_version}, pk="url")
+            with db.conn:
+                last_sync_table.upsert({"url": url, "last_sync": max_version}, pk="url")
 
-    else:
-        print("No changes found")
+        else:
+            print("No changes found for table", table)
 
 
 if __name__ == "__main__":
