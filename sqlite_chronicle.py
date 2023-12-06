@@ -66,8 +66,17 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str):
         # Populate the _chronicle_ table with existing rows from the original table
         c.execute(
             f"""
-            INSERT INTO "_chronicle_{table_name}" ({', '.join([col[0] for col in primary_key_columns])}, added_ms, updated_ms, version)
-            SELECT {', '.join([f'"{col[0]}"' for col in primary_key_columns])}, {current_time_expr}, {current_time_expr}, 1
+            INSERT INTO "_chronicle_{table_name}" (
+                {', '.join([col[0] for col in primary_key_columns])},
+                added_ms,
+                updated_ms,
+                version
+            )
+            SELECT
+                {', '.join([f'"{col[0]}"' for col in primary_key_columns])},
+                {current_time_expr},
+                {current_time_expr},
+                ROW_NUMBER() OVER (ORDER BY id)
             FROM "{table_name}";
             """
         )

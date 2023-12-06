@@ -39,7 +39,7 @@ def test_enable_chronicle(table_name, pks):
                 "id": 2,
                 "added_ms": ANY,
                 "updated_ms": ANY,
-                "version": 1,
+                "version": 2,
                 "deleted": 0,
             },
         ]
@@ -58,7 +58,7 @@ def test_enable_chronicle(table_name, pks):
                 "name": "Pancakes",
                 "added_ms": ANY,
                 "updated_ms": ANY,
-                "version": 1,
+                "version": 2,
                 "deleted": 0,
             },
         ]
@@ -75,7 +75,7 @@ def test_enable_chronicle(table_name, pks):
             "id": 3,
             "added_ms": ANY,
             "updated_ms": ANY,
-            "version": 2,
+            "version": 3,
             "deleted": 0,
         }
 
@@ -85,7 +85,7 @@ def test_enable_chronicle(table_name, pks):
             "name": "Mango",
             "added_ms": ANY,
             "updated_ms": ANY,
-            "version": 2,
+            "version": 3,
             "deleted": 0,
         }
 

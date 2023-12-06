@@ -47,7 +47,6 @@ def _delete_row(db):
 
 
 def test_updates_since(db):
-    db2 = Database(memory=True)
     changes = list(updates_since(db.conn, "mysteries"))
     assert changes == [
         Change(
@@ -66,7 +65,7 @@ def test_updates_since(db):
             pks=(2,),
             added_ms=ANY,
             updated_ms=ANY,
-            version=1,
+            version=2,
             row={
                 "id": 2,
                 "name": "The disappearance of the Amber Room",
@@ -83,7 +82,7 @@ def test_updates_since(db):
             pks=(3,),
             added_ms=ANY,
             updated_ms=ANY,
-            version=2,
+            version=3,
             row={"id": 3, "name": "The lost city of Atlantis", "year": "360 BC"},
             deleted=0,
         )
@@ -96,7 +95,7 @@ def test_updates_since(db):
             pks=(1,),
             added_ms=ANY,
             updated_ms=ANY,
-            version=3,
+            version=4,
             row={
                 "id": 1,
                 "name": "The fate of the crew on the Mary Celeste",
@@ -108,7 +107,7 @@ def test_updates_since(db):
             pks=(3,),
             added_ms=ANY,
             updated_ms=ANY,
-            version=4,
+            version=5,
             row={"id": 3, "name": "The lost city of Atlantis", "year": "unknown"},
             deleted=0,
         ),
@@ -121,8 +120,18 @@ def test_updates_since(db):
             pks=(2,),
             added_ms=ANY,
             updated_ms=ANY,
-            version=5,
+            version=6,
             row={"id": 2, "name": None, "year": None},
             deleted=1,
         )
     ]
+
+
+def test_updates_since_with_more_rows_than_batch_size():
+    db = Database(memory=True)
+    db["mysteries"].insert_all(
+        ({"id": i, "name": "Name {}".format(i)} for i in range(201)), pk="id"
+    )
+    enable_chronicle(db.conn, "mysteries")
+    changes = list(updates_since(db.conn, "mysteries", batch_size=100))
+    assert len(changes) == 201
