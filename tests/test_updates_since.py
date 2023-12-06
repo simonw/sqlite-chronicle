@@ -127,7 +127,7 @@ def test_updates_since(db):
     ]
 
 
-def test_updates_since_with_more_rows_than_batch_size():
+def test_updates_since_more_rows_than_batch_size_when_enabled():
     db = Database(memory=True)
     db["mysteries"].insert_all(
         ({"id": i, "name": "Name {}".format(i)} for i in range(201)), pk="id"
@@ -135,3 +135,21 @@ def test_updates_since_with_more_rows_than_batch_size():
     enable_chronicle(db.conn, "mysteries")
     changes = list(updates_since(db.conn, "mysteries", batch_size=100))
     assert len(changes) == 201
+
+
+def test_updates_since_more_rows_than_batch_size_in_an_update():
+    # https://github.com/simonw/sqlite-chronicle/issues/4#issuecomment-1842059727
+    db = Database(memory=True)
+    db["mysteries"].insert_all(
+        ({"id": i, "name": "Name {}".format(i)} for i in range(201)), pk="id"
+    )
+    enable_chronicle(db.conn, "mysteries")
+    since_id = db.execute("select max(version) from _chronicle_mysteries").fetchone()[0]
+    # Update them all in one go
+    with db.conn:
+        db.execute("update mysteries set name = 'Updated'")
+
+    changes = list(updates_since(db.conn, "mysteries", batch_size=100, since=since_id))
+    assert len(changes) == 201
+    # Each change should have a different version
+    assert len(set(c.version for c in changes)) == 201
