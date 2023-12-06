@@ -115,3 +115,11 @@ def test_enable_chronicle(table_name, pks):
         # This should have renamed the row in the chronicle table as well
         renamed_row = db[chronicle_table].get(4)
         assert renamed_row["updated_ms"] > version
+
+
+@pytest.mark.parametrize("pks", (["foo"], ["foo", "bar"]))
+def test_enable_chronicle_alternative_primary_keys(pks):
+    db = sqlite_utils.Database(memory=True)
+    db["dogs"].insert({"foo": 1, "bar": 2, "name": "Cleo", "color": "black"}, pk=pks)
+    enable_chronicle(db.conn, "dogs")
+    assert db["_chronicle_dogs"].pks == pks
