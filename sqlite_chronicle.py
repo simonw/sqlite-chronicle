@@ -1,7 +1,8 @@
+import argparse
 import dataclasses
 import sqlite3
 import textwrap
-from typing import Generator, Optional
+from typing import Generator, List, Optional
 
 
 class ChronicleError(Exception):
@@ -19,6 +20,8 @@ class Change:
 
 
 def enable_chronicle(conn: sqlite3.Connection, table_name: str):
+    sqls = generate_chronicle_sql(conn, table_name)
+
     c = conn.cursor()
 
     # Check if the _chronicle_ table exists
@@ -27,6 +30,17 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str):
     )
     if c.fetchone():
         return
+
+    with conn:
+        c = conn.cursor()
+        for sql in sqls:
+            c.execute(sql)
+
+
+def generate_chronicle_sql(conn: sqlite3.Connection, table_name: str) -> List[str]:
+    c = conn.cursor()
+
+    sqls = []
 
     # Determine primary key columns and their types
     c.execute(f'PRAGMA table_info("{table_name}");')
@@ -44,89 +58,89 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str):
         f'COALESCE((SELECT MAX(version) FROM "_chronicle_{table_name}"), 0) + 1'
     )
 
-    with conn:
-        c.execute(
-            f"""
-            CREATE TABLE "_chronicle_{table_name}" (
-                {pk_def},
-                added_ms INTEGER,
-                updated_ms INTEGER,
-                version INTEGER DEFAULT 0,
-                deleted INTEGER DEFAULT 0,
-                PRIMARY KEY ({', '.join([f'"{col[0]}"' for col in primary_key_columns])})
-            );
-            """
-        )
+    sqls.append(
+        f"""
+        CREATE TABLE "_chronicle_{table_name}" (
+            {pk_def},
+            added_ms INTEGER,
+            updated_ms INTEGER,
+            version INTEGER DEFAULT 0,
+            deleted INTEGER DEFAULT 0,
+            PRIMARY KEY ({', '.join([f'"{col[0]}"' for col in primary_key_columns])})
+        );
+        """
+    )
 
-        # Index on version column
-        c.execute(
-            f"CREATE INDEX '_chronicle_{table_name}_version' ON '_chronicle_{table_name}' (version);"
-        )
+    # Index on version column
+    sqls.append(
+        f"CREATE INDEX '_chronicle_{table_name}_version' ON '_chronicle_{table_name}' (version);"
+    )
 
-        # Populate the _chronicle_ table with existing rows from the original table
-        pks = ", ".join([f'"{col[0]}"' for col in primary_key_columns])
-        c.execute(
-            f"""
-            INSERT INTO "_chronicle_{table_name}" (
-                {', '.join([col[0] for col in primary_key_columns])},
-                added_ms,
-                updated_ms,
-                version
-            )
-            SELECT
-                {pks},
-                {current_time_expr},
-                {current_time_expr},
-                ROW_NUMBER() OVER (ORDER BY {pks})
-            FROM "{table_name}";
-            """
+    # Populate the _chronicle_ table with existing rows from the original table
+    pks = ", ".join([f'"{col[0]}"' for col in primary_key_columns])
+    sqls.append(
+        f"""
+        INSERT INTO "_chronicle_{table_name}" (
+            {', '.join([col[0] for col in primary_key_columns])},
+            added_ms,
+            updated_ms,
+            version
         )
+        SELECT
+            {pks},
+            {current_time_expr},
+            {current_time_expr},
+            ROW_NUMBER() OVER (ORDER BY {pks})
+        FROM "{table_name}";
+        """
+    )
 
-        # Create the after insert trigger
-        after_insert_sql = textwrap.dedent(
-            f"""
-        CREATE TRIGGER "_chronicle_{table_name}_ai"
-        AFTER INSERT ON "{table_name}"
+    # Create the after insert trigger
+    after_insert_sql = textwrap.dedent(
+        f"""
+    CREATE TRIGGER "_chronicle_{table_name}_ai"
+    AFTER INSERT ON "{table_name}"
+    FOR EACH ROW
+    BEGIN
+        INSERT INTO "_chronicle_{table_name}" ({', '.join([f'"{col[0]}"' for col in primary_key_columns])}, added_ms, updated_ms, version)
+        VALUES ({', '.join(['NEW.' + f'"{col[0]}"' for col in primary_key_columns])}, {current_time_expr}, {current_time_expr}, {next_version_expr});
+    END;
+    """
+    )
+    sqls.append(after_insert_sql)
+
+    # Create the after update trigger
+    sqls.append(
+        f"""
+        CREATE TRIGGER "_chronicle_{table_name}_au"
+        AFTER UPDATE ON "{table_name}"
         FOR EACH ROW
         BEGIN
-            INSERT INTO "_chronicle_{table_name}" ({', '.join([f'"{col[0]}"' for col in primary_key_columns])}, added_ms, updated_ms, version)
-            VALUES ({', '.join(['NEW.' + f'"{col[0]}"' for col in primary_key_columns])}, {current_time_expr}, {current_time_expr}, {next_version_expr});
+            UPDATE "_chronicle_{table_name}"
+            SET updated_ms = {current_time_expr},
+                version = {next_version_expr},
+                {', '.join([f'"{col[0]}" = NEW."{col[0]}"' for col in primary_key_columns])}
+            WHERE { ' AND '.join([f'"{col[0]}" = OLD."{col[0]}"' for col in primary_key_columns]) };
         END;
         """
-        )
-        c.execute(after_insert_sql)
+    )
 
-        # Create the after update trigger
-        c.execute(
-            f"""
-            CREATE TRIGGER "_chronicle_{table_name}_au"
-            AFTER UPDATE ON "{table_name}"
-            FOR EACH ROW
-            BEGIN
-                UPDATE "_chronicle_{table_name}"
-                SET updated_ms = {current_time_expr},
-                    version = {next_version_expr},
-                    {', '.join([f'"{col[0]}" = NEW."{col[0]}"' for col in primary_key_columns])}
-                WHERE { ' AND '.join([f'"{col[0]}" = OLD."{col[0]}"' for col in primary_key_columns]) };
-            END;
-            """
-        )
-
-        # Create the after delete trigger
-        c.execute(
-            f"""
-            CREATE TRIGGER "_chronicle_{table_name}_ad"
-            AFTER DELETE ON "{table_name}"
-            FOR EACH ROW
-            BEGIN
-                UPDATE "_chronicle_{table_name}"
-                SET updated_ms = {current_time_expr},
-                    version = {next_version_expr},
-                    deleted = 1
-                WHERE { ' AND '.join([f'"{col[0]}" = OLD."{col[0]}"' for col in primary_key_columns]) };
-            END;
-            """
-        )
+    # Create the after delete trigger
+    sqls.append(
+        f"""
+        CREATE TRIGGER "_chronicle_{table_name}_ad"
+        AFTER DELETE ON "{table_name}"
+        FOR EACH ROW
+        BEGIN
+            UPDATE "_chronicle_{table_name}"
+            SET updated_ms = {current_time_expr},
+                version = {next_version_expr},
+                deleted = 1
+            WHERE { ' AND '.join([f'"{col[0]}" = OLD."{col[0]}"' for col in primary_key_columns]) };
+        END;
+        """
+    )
+    return sqls
 
 
 def updates_since(
@@ -195,3 +209,29 @@ def updates_since(
                 row=row_without,
                 deleted=row["__chronicle_deleted"],
             )
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Process some arguments.")
+    parser.add_argument("filepath", help="File path to the database")
+    parser.add_argument("table", help="The table name")
+    parser.add_argument(
+        "--sql",
+        action="store_true",
+        help="Output SQL for the triggers without applying it",
+    )
+    args = parser.parse_args()
+
+    print(f"File path: {args.filepath}")
+    print(f"Table: {args.table}")
+    print(f"SQL: {args.sql}")
+
+    conn = sqlite3.connect(args.filepath)
+
+    sqls = generate_chronicle_sql(conn, args.table)
+    for sql in sqls:
+        print(sql)
+
+
+if __name__ == "__main__":
+    main()
