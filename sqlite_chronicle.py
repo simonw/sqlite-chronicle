@@ -1,7 +1,9 @@
+# sqlite_chronicle.py
+
 import dataclasses
 import sqlite3
 import textwrap
-from typing import Generator, Optional
+from typing import Generator, Optional, List
 
 
 class ChronicleError(Exception):
@@ -18,115 +20,185 @@ class Change:
     deleted: bool
 
 
-def enable_chronicle(conn: sqlite3.Connection, table_name: str):
-    c = conn.cursor()
+class ChronicleError(Exception):
+    pass
 
-    # Check if the _chronicle_ table exists
-    c.execute(
-        f"SELECT name FROM sqlite_master WHERE type='table' AND name='_chronicle_{table_name}';"
+
+def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
+    """
+    Turn on chronicle tracking for `table_name`.
+
+    - Creates _chronicle_<table> (PK cols + __added_ms, __updated_ms, __version, __deleted)
+    - Populates that table with one row per existing row in the original
+    - AFTER INSERT trigger
+    - AFTER UPDATE trigger (WHEN any OLD<>NEW)
+    - AFTER DELETE trigger
+
+    Requires client code to use UPSERT (INSERT…ON CONFLICT DO UPDATE) for upserts rather
+    than INSERT OR REPLACE, since INSERT OR REPLACE will be incorrectly tracked.
+    """
+    cursor = conn.cursor()
+
+    # If chronicle table exists already, do nothing
+    chronicle_table = f"_chronicle_{table_name}"
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (chronicle_table,),
     )
-    if c.fetchone():
+    if cursor.fetchone():
         return
 
-    # Determine primary key columns and their types
-    c.execute(f'PRAGMA table_info("{table_name}");')
-    primary_key_columns = [(row[1], row[2]) for row in c.fetchall() if row[5]]
+    # Gather table schema info
+    cursor.execute(f'PRAGMA table_info("{table_name}")')
+    table_info = cursor.fetchall()
+
+    # Identify primary key columns and non-PK columns
+    primary_key_columns = [(row[1], row[2]) for row in table_info if row[5]]
     if not primary_key_columns:
-        raise ChronicleError(f"Table {table_name} has no primary keys")
+        raise ChronicleError(f"{table_name!r} has no PRIMARY KEY")
+    non_pk_columns = [row[1] for row in table_info if not row[5]]
+    primary_key_names = [col for col, _ in primary_key_columns]
 
-    # Create the _chronicle_ table
-    pk_def = ", ".join(
-        [f'"{col_name}" {col_type}' for col_name, col_type in primary_key_columns]
+    # SQL expressions for timestamps and versioning
+    current_timestamp_expr = (
+        "CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER)"
     )
-
-    current_time_expr = "CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER)"
     next_version_expr = (
-        f'COALESCE((SELECT MAX(version) FROM "_chronicle_{table_name}"), 0) + 1'
+        f'COALESCE((SELECT MAX(__version) FROM "{chronicle_table}"), 0) + 1'
     )
 
-    with conn:
-        c.execute(
-            f"""
-            CREATE TABLE "_chronicle_{table_name}" (
-                {pk_def},
-                added_ms INTEGER,
-                updated_ms INTEGER,
-                version INTEGER DEFAULT 0,
-                deleted INTEGER DEFAULT 0,
-                PRIMARY KEY ({', '.join([f'"{col[0]}"' for col in primary_key_columns])})
-            );
-            """
+    # Build trigger WHEN condition: any non-PK column changed
+    if non_pk_columns:
+        update_condition = " OR ".join(
+            f'OLD."{col}" IS NOT NEW."{col}"' for col in non_pk_columns
         )
+    else:
+        # no non-PK columns → treat any update as a change
+        update_condition = "1"
 
-        # Index on version column
-        c.execute(
-            f"CREATE INDEX '_chronicle_{table_name}_version' ON '_chronicle_{table_name}' (version);"
-        )
+    # Build PK matching clause for WHERE conditions
+    primary_key_match_clause = " AND ".join(
+        f'"{col}" = NEW."{col}"' for col in primary_key_names
+    )
 
-        # Populate the _chronicle_ table with existing rows from the original table
-        pks = ", ".join([f'"{col[0]}"' for col in primary_key_columns])
-        c.execute(
+    # Collect all SQL statements to execute
+    sql_statements: List[str] = []
+
+    # 1) Create chronicle table
+    pk_definitions = ", ".join(
+        f'"{col}" {col_type}' for col, col_type in primary_key_columns
+    )
+    pk_constraint = ", ".join(f'"{col}"' for col in primary_key_names)
+    sql_statements.append(
+        textwrap.dedent(
             f"""
-            INSERT INTO "_chronicle_{table_name}" (
-                {', '.join([col[0] for col in primary_key_columns])},
-                added_ms,
-                updated_ms,
-                version
+            CREATE TABLE "{chronicle_table}" (
+              {pk_definitions},
+              __added_ms   INTEGER,
+              __updated_ms INTEGER,
+              __version    INTEGER,
+              __deleted    INTEGER DEFAULT 0,
+              PRIMARY KEY({pk_constraint})
             )
-            SELECT
-                {pks},
-                {current_time_expr},
-                {current_time_expr},
-                ROW_NUMBER() OVER (ORDER BY {pks})
-            FROM "{table_name}";
-            """
-        )
-
-        # Create the after insert trigger
-        after_insert_sql = textwrap.dedent(
-            f"""
-        CREATE TRIGGER "_chronicle_{table_name}_ai"
-        AFTER INSERT ON "{table_name}"
-        FOR EACH ROW
-        BEGIN
-            INSERT INTO "_chronicle_{table_name}" ({', '.join([f'"{col[0]}"' for col in primary_key_columns])}, added_ms, updated_ms, version)
-            VALUES ({', '.join(['NEW.' + f'"{col[0]}"' for col in primary_key_columns])}, {current_time_expr}, {current_time_expr}, {next_version_expr});
-        END;
         """
-        )
-        c.execute(after_insert_sql)
-
-        # Create the after update trigger
-        c.execute(
+        ).strip()
+    )
+    sql_statements.append(
+        textwrap.dedent(
             f"""
-            CREATE TRIGGER "_chronicle_{table_name}_au"
-            AFTER UPDATE ON "{table_name}"
+            CREATE INDEX "{chronicle_table}__version_idx"
+              ON "{chronicle_table}"(__version);
+        """
+        ).strip()
+    )
+
+    # 2) Seed chronicle table with existing rows
+    version_expr = (
+        f"ROW_NUMBER() OVER (ORDER BY "
+        + ", ".join(f'"{col}"' for col in primary_key_names)
+        + ")"
+    )
+
+    cols_insert = (
+        ", ".join(f'"{col}"' for col in primary_key_names)
+        + ", __added_ms, __updated_ms, __version, __deleted"
+    )
+    cols_select = (
+        ", ".join(f'"{col}"' for col in primary_key_names)
+        + f", {current_timestamp_expr} AS __added_ms"
+        + f", {current_timestamp_expr} AS __updated_ms"
+        + f", {version_expr} AS __version"
+        + ", 0 AS __deleted"
+    )
+
+    sql_statements.append(
+        f'INSERT INTO "{chronicle_table}" ({cols_insert})\n'
+        f" SELECT {cols_select}\n"
+        f'   FROM "{table_name}";'
+    )
+
+    # 3) AFTER INSERT trigger
+    sql_statements.append(
+        textwrap.dedent(
+            f"""
+            CREATE TRIGGER "chronicle_{table_name}_ai"
+            AFTER INSERT ON "{table_name}"
             FOR EACH ROW
             BEGIN
-                UPDATE "_chronicle_{table_name}"
-                SET updated_ms = {current_time_expr},
-                    version = {next_version_expr},
-                    {', '.join([f'"{col[0]}" = NEW."{col[0]}"' for col in primary_key_columns])}
-                WHERE { ' AND '.join([f'"{col[0]}" = OLD."{col[0]}"' for col in primary_key_columns]) };
+              INSERT OR IGNORE INTO "{chronicle_table}" (
+                {', '.join(f'"{col}"' for col in primary_key_names)},
+                __added_ms, __updated_ms, __version, __deleted
+              )
+              VALUES (
+                {', '.join(f'NEW."{col}"' for col in primary_key_names)},
+                {current_timestamp_expr}, 0, {next_version_expr}, 0
+              );
             END;
-            """
-        )
+        """
+        ).strip()
+    )
 
-        # Create the after delete trigger
-        c.execute(
+    # 4) AFTER UPDATE trigger (only if real change)
+    sql_statements.append(
+        textwrap.dedent(
             f"""
-            CREATE TRIGGER "_chronicle_{table_name}_ad"
+            CREATE TRIGGER "chronicle_{table_name}_au"
+            AFTER UPDATE ON "{table_name}"
+            FOR EACH ROW
+            WHEN {update_condition}
+            BEGIN
+              UPDATE "{chronicle_table}"
+                SET __updated_ms = {current_timestamp_expr},
+                    __version    = {next_version_expr}
+              WHERE {primary_key_match_clause};
+            END;
+        """
+        ).strip()
+    )
+
+    # 5) AFTER DELETE trigger
+    pk_old_match = " AND ".join(f'"{col}" = OLD."{col}"' for col in primary_key_names)
+    sql_statements.append(
+        textwrap.dedent(
+            f"""
+            CREATE TRIGGER "chronicle_{table_name}_ad"
             AFTER DELETE ON "{table_name}"
             FOR EACH ROW
             BEGIN
-                UPDATE "_chronicle_{table_name}"
-                SET updated_ms = {current_time_expr},
-                    version = {next_version_expr},
-                    deleted = 1
-                WHERE { ' AND '.join([f'"{col[0]}" = OLD."{col[0]}"' for col in primary_key_columns]) };
+              UPDATE "{chronicle_table}"
+                SET __updated_ms = {current_timestamp_expr},
+                    __version    = {next_version_expr},
+                    __deleted    = 1
+              WHERE {pk_old_match};
             END;
-            """
-        )
+        """
+        ).strip()
+    )
+
+    # Execute all statements within a transaction
+    with conn:
+        for stmt in sql_statements:
+            cursor.execute(stmt)
 
 
 def updates_since(
@@ -135,63 +207,59 @@ def updates_since(
     since: Optional[int] = None,
     batch_size: int = 1000,
 ) -> Generator[Change, None, None]:
-    cursor = conn.cursor()
-    cursor.row_factory = sqlite3.Row
-
+    """
+    Yields Change(pks, added_ms, updated_ms, version, row, deleted)
+    for every chronicle.version > since, in ascending order.
+    """
+    cur = conn.cursor()
+    cur.row_factory = sqlite3.Row
     if since is None:
         since = 0
 
-    # Find primary keys
-    cursor.execute(f"PRAGMA table_info({table_name})")
-    columns = cursor.fetchall()
-    primary_keys = [col["name"] for col in columns if col["pk"]]
+    # find PK columns
+    cur.execute(f'PRAGMA table_info("{table_name}")')
+    cols = cur.fetchall()
+    pk_names = [c["name"] for c in cols if c["pk"]]
+    non_pk = [c["name"] for c in cols if not c["pk"]]
 
-    # Create the join_on clause based on primary keys
-    join_conditions = [f'chronicle."{pk}" = t."{pk}"' for pk in primary_keys]
-    join_on = " AND ".join(join_conditions)
-
-    # Select clause is primary keys from chronicle table, then columns from original table
-    select_clause = ", ".join(
-        [f"chronicle.{pk}" for pk in primary_keys]
-        + [f"t.{col['name']}" for col in columns if col not in primary_keys]
-        + [
-            "chronicle.added_ms as __chronicle_added_ms",
-            "chronicle.updated_ms as __chronicle_updated_ms",
-            "chronicle.version as __chronicle_version",
-            "CASE WHEN t.id IS NULL THEN 1 ELSE 0 END AS __chronicle_deleted",
-        ]
+    # build select
+    chron = f"_chronicle_{table_name}"
+    pks = ", ".join(f'c."{c}"' for c in pk_names)
+    originals = ", ".join(f't."{c}"' for c in non_pk)
+    select = ", ".join(
+        [pks, originals, "c.__added_ms", "c.__updated_ms", "c.__version", "c.__deleted"]
     )
+    join = " AND ".join(f'c."{c}" = t."{c}"' for c in pk_names)
 
-    # Paginate through ordered by version batch_size at a time
+    sql = textwrap.dedent(
+        f"""
+        SELECT {select}
+          FROM {chron} AS c
+          LEFT JOIN "{table_name}" AS t
+            ON {join}
+         WHERE c.__version > ?
+         ORDER BY c.__version
+         LIMIT {batch_size}
+        """
+    ).strip()
+
     while True:
-        sql = textwrap.dedent(
-            f"""
-            SELECT {select_clause}
-            FROM "_chronicle_{table_name}" chronicle
-            LEFT JOIN "{table_name}" t ON {join_on}
-            WHERE chronicle.version > ?
-            ORDER BY chronicle.version
-            LIMIT {batch_size}
-            """
-        )
-        rows = cursor.execute(sql, (since,)).fetchall()
-
+        rows = cur.execute(sql, (since,)).fetchall()
         if not rows:
             break
-
-        for row in rows:
-            # Need row without __chronicle_ columns
-            row_without = dict(
-                (k, row[k]) for k in row.keys() if not k.startswith("__chronicle_")
-            )
-            added_ms = row["__chronicle_added_ms"]
-            updated_ms = row["__chronicle_updated_ms"]
-            since = row["__chronicle_version"]
+        for r in rows:
+            since = r["__version"]
+            # build row dict of original columns
+            row = {
+                c: r[c]
+                for c in r.keys()
+                if c not in ("__added_ms", "__updated_ms", "__version", "__deleted")
+            }
             yield Change(
-                pks=tuple(row[pk] for pk in primary_keys),
-                added_ms=added_ms,
-                updated_ms=updated_ms,
-                version=since,
-                row=row_without,
-                deleted=row["__chronicle_deleted"],
+                pks=tuple(r[c] for c in pk_names),
+                added_ms=r["__added_ms"],
+                updated_ms=r["__updated_ms"],
+                version=r["__version"],
+                row=row,
+                deleted=bool(r["__deleted"]),
             )
