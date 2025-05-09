@@ -103,3 +103,74 @@ This has numerous potential applications, including:
 - Indexing: if you need to update an Elasticsearch index or a vector database embeddings index or similar you can run against just the records that changed since your last run - see also [The denormalized query engine design pattern](https://2017.djangocon.us/talks/the-denormalized-query-engine-design-pattern/)
 - Enrichments: [datasette-enrichments](https://github.com/datasette/datasette-enrichments) needs to to persist something that says "every address column should be geocoded" - then have an enrichment that runs every X seconds and looks for newly inserted or updated rows and enriches just those.
 - Showing people what has changed since their last visit - "52 rows have been updated and 16 deleted since yesterday" kind of thing.
+
+## Example SQL schema
+
+Here's an example SQL schema showing the `_chronicle_dogs` table that would be created for a `dogs` table, along with its triggers:
+
+
+<!-- [[[cog
+import cog
+import sqlite3
+import sqlite_chronicle
+db = sqlite3.connect(":memory:")
+db.execute('create table dogs (id integer primary key, name text, age integer)')
+sqlite_chronicle.enable_chronicle(db, 'dogs')
+cog.out('```sql\n')
+cog.outl(';\n\n'.join(r[0] for r in db.execute('select sql from sqlite_master').fetchall()))
+cog.out('\n```')
+]]] -->
+```sql
+CREATE TABLE dogs (id integer primary key, name text, age integer);
+
+CREATE TABLE "_chronicle_dogs" (
+  "id" INTEGER,
+  __added_ms   INTEGER,
+  __updated_ms INTEGER,
+  __version    INTEGER,
+  __deleted    INTEGER DEFAULT 0,
+  PRIMARY KEY("id")
+);
+
+CREATE INDEX "_chronicle_dogs__version_idx"
+  ON "_chronicle_dogs"(__version);
+
+CREATE TRIGGER "chronicle_dogs_ai"
+AFTER INSERT ON "dogs"
+FOR EACH ROW
+BEGIN
+  INSERT OR IGNORE INTO "_chronicle_dogs" (
+    "id",
+    __added_ms, __updated_ms, __version, __deleted
+  )
+  VALUES (
+    NEW."id",
+    CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER), CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER),
+    COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"), 0) + 1, 0
+  );
+END;
+
+CREATE TRIGGER "chronicle_dogs_au"
+AFTER UPDATE ON "dogs"
+FOR EACH ROW
+WHEN OLD."name" IS NOT NEW."name" OR OLD."age" IS NOT NEW."age"
+BEGIN
+  UPDATE "_chronicle_dogs"
+    SET __updated_ms = CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER),
+        __version    = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"), 0) + 1
+  WHERE "id" = NEW."id";
+END;
+
+CREATE TRIGGER "chronicle_dogs_ad"
+AFTER DELETE ON "dogs"
+FOR EACH ROW
+BEGIN
+  UPDATE "_chronicle_dogs"
+    SET __updated_ms = CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER),
+        __version    = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"), 0) + 1,
+        __deleted    = 1
+  WHERE "id" = OLD."id";
+END
+
+```
+<!-- [[[end]]] -->

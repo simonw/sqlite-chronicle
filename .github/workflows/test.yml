@@ -25,3 +25,4 @@ jobs:
     - name: Run tests
       run: |
         python -m pytest
+        cog --check README.md
