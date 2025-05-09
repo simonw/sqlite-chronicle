@@ -1,5 +1,3 @@
-# sqlite_chronicle.py
-
 import dataclasses
 import sqlite3
 import textwrap
