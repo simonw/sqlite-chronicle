@@ -267,7 +267,6 @@ def updates_since(
 def cli_main(argv=None) -> int:
     import argparse
     import sys
-    import sqlite3
 
     parser = argparse.ArgumentParser(
         prog="python -m sqlite_chronicle",
