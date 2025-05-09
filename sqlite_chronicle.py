@@ -52,6 +52,10 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     cursor.execute(f'PRAGMA table_info("{table_name}")')
     table_info = cursor.fetchall()
 
+    # Error if no such table
+    if not table_info:
+        raise ChronicleError(f"Table {table_name!r} does not exist")
+
     # Identify primary key columns and non-PK columns
     primary_key_columns = [(row[1], row[2]) for row in table_info if row[5]]
     if not primary_key_columns:
@@ -263,3 +267,49 @@ def updates_since(
                 row=row,
                 deleted=bool(r["__deleted"]),
             )
+
+
+def cli_main(argv=None) -> int:
+    import argparse
+    import sys
+    import sqlite3
+
+    parser = argparse.ArgumentParser(
+        prog="python -m sqlite_chronicle",
+        description="Enable chronicle tracking on one or more tables in an SQLite DB.",
+    )
+    parser.add_argument("db_path", help="Path to the SQLite database file")
+    parser.add_argument(
+        "tables",
+        nargs="+",
+        help="One or more table names to enable chronicle tracking on",
+    )
+
+    args = parser.parse_args(argv)
+
+    try:
+        conn = sqlite3.connect(args.db_path)
+    except sqlite3.Error as e:
+        print(f"ERROR: cannot open database {args.db_path!r}: {e}", file=sys.stderr)
+        return 1
+
+    any_error = False
+    for tbl in args.tables:
+        try:
+            enable_chronicle(conn, tbl)
+            print(f"- chronicle enabled on table {tbl!r}")
+        except ChronicleError as ce:
+            print(f"ERROR: {ce}", file=sys.stderr)
+            any_error = True
+        except sqlite3.Error as se:
+            print(f"SQL ERROR on table {tbl!r}: {se}", file=sys.stderr)
+            any_error = True
+
+    conn.close()
+    return 1 if any_error else 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    sys.exit(cli_main())

@@ -85,3 +85,11 @@ This has numerous potential applications, including:
 - Indexing: if you need to update an Elasticsearch index or a vector database embeddings index or similar you can run against just the records that changed since your last run - see also [The denormalized query engine design pattern](https://2017.djangocon.us/talks/the-denormalized-query-engine-design-pattern/)
 - Enrichments: [datasette-enrichments](https://github.com/datasette/datasette-enrichments) needs to to persist something that says "every address column should be geocoded" - then have an enrichment that runs every X seconds and looks for newly inserted or updated rows and enriches just those.
 - Showing people what has changed since their last visit - "52 rows have been updated and 16 deleted since yesterday" kind of thing.
+
+## Command-line interface
+
+You can enable chronicle for specific tables in a SQLite database using the command-line interface, passing in one or more table names:
+
+```bash
+python -m sqlite_chronicle database.db table_1 table_2
+```
