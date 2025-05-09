@@ -13,25 +13,38 @@ Use triggers to track when rows in a SQLite table were updated or deleted
 pip install sqlite-chronicle
 ```
 
-## enable_chronicle(conn, table_name)
+## Command-line interface
+
+You can enable chronicle for specific tables in a SQLite database using the command-line interface, passing in one or more table names:
+
+```bash
+python -m sqlite_chronicle database.db table_1 table_2
+```
+
+## Python API
+
+This package exposes two Python functions for configuring and using chronicle tables:
+
+### enable_chronicle(conn, table_name)
 
 This module provides a function: `sqlite_chronicle.enable_chronicle(conn, table_name)`, which does the following:
 
 1. Checks if a `_chronicle_{table_name}` table exists already. If so, it does nothing. Otherwise...
-2. Creates that table, with the same primary key columns as the original table plus integer columns `added_ms`, `updated_ms`, `version` and `deleted`
-3. Creates a new row in the chronicle table corresponding to every row in the original table, setting `added_ms` and `updated_ms` to the current timestamp in milliseconds, and `version` column that starts at 1 and increments for each subsequent row
+2. Creates that table, with the same primary key columns as the original table plus integer columns `__added_ms`, `__updated_ms`, `__version` and `__deleted`
+3. Creates a new row in the chronicle table corresponding to every row in the original table, setting `__added_ms` and `__updated_ms` to the current timestamp in milliseconds, and `__version` column that starts at 1 and increments for each subsequent row
 4. Sets up three triggers on the table:
-  - An after insert trigger, which creates a new row in the chronicle table, sets `added_ms` and `updated_ms` to the current time and increments the `version`
-  - An after update trigger, which updates the `updated_ms` timestamp and also updates any primary keys if they have changed (likely extremely rare) plus increments the `version`
-  - An after delete trigger, which updates the `updated_ms`, increments the `version` and places a `1` in the `deleted` column
 
-The function will raise a `sqlite_chronicle.ChronicleError` exception if the table does not have a single or compound primary key.
+  - An AFTER INSERT trigger, which creates a new row in the chronicle table, sets `__added_ms` and `__updated_ms` to the current time and sets the `__version` to one higher than the current maximum version for that table
+  - An AFTER UPDATE trigger, which updates the `__updated_ms` timestamp and increments the `__version` - but only if at least one column in the row has changed
+  - An AFTER DELETE trigger, which updates the `__updated_ms`, increments the `__version` and places a `1` in the `deleted` column
 
-Note that the `version` for a table is a globally incrementing number, so every time it is set it will be set to the current `max(version)` + 1 for that entire table.
+The function will raise a `sqlite_chronicle.ChronicleError` exception if the table does not exist or if it does not have a single or compound primary key, 
+
+Note that the `__version` for a table is a globally incrementing number, so every time it is set it will be set to the current `max(__version)` + 1 for that entire table.
 
 The end result is a chronicle table that looks something like this:
 
-|  id |    added_ms  | updated_ms | version | deleted |
+|  id |    __added_ms  | __updated_ms | __version | __deleted |
 |-----|---------------|---------|--------|---------|
 |  47 | 1694408890954 | 1694408890954 | 2 |      0 |
 |  48 | 1694408874863 | 1694408874863 | 3 |      1 |
@@ -39,7 +52,7 @@ The end result is a chronicle table that looks something like this:
 |   2 | 1694408825192 | 1694408825192 | 5 |      0 |
 |   3 | 1694408825192 | 1694408825192 | 6 |      0 |
 
-## updates_since(conn, table_name, since=None, batch_size=1000)
+### updates_since(conn, table_name, since=None, batch_size=1000)
 
 The `sqlite_chronicle.updates_since()` function returns a generator over a list of `Change` objects.
 
@@ -59,7 +72,7 @@ Change(
     updated_ms=1701836971223,
     version=5,
     row={'id': 5, 'name': 'Simon'},
-    deleted=0
+    deleted=False
 )
 ```
 A `Change` is a dataclass with the following properties:
@@ -85,11 +98,3 @@ This has numerous potential applications, including:
 - Indexing: if you need to update an Elasticsearch index or a vector database embeddings index or similar you can run against just the records that changed since your last run - see also [The denormalized query engine design pattern](https://2017.djangocon.us/talks/the-denormalized-query-engine-design-pattern/)
 - Enrichments: [datasette-enrichments](https://github.com/datasette/datasette-enrichments) needs to to persist something that says "every address column should be geocoded" - then have an enrichment that runs every X seconds and looks for newly inserted or updated rows and enriches just those.
 - Showing people what has changed since their last visit - "52 rows have been updated and 16 deleted since yesterday" kind of thing.
-
-## Command-line interface
-
-You can enable chronicle for specific tables in a SQLite database using the command-line interface, passing in one or more table names:
-
-```bash
-python -m sqlite_chronicle database.db table_1 table_2
-```
