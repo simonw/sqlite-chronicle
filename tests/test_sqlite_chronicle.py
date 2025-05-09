@@ -127,24 +127,24 @@ def test_enable_chronicle_alternative_primary_keys(pks):
 
 def test_upsert():
     db = sqlite_utils.Database(memory=True)
-    dogs = db.table("dogs", pk="id")
-    chronicle_dogs = db.table("_chronicle_dogs")
-    dogs.insert({"id": 1, "name": "Cleo", "color": "black"})
+    dogs = db.table("dogs", pk="id").create(
+        {"id": int, "name": str, "color": str}, pk="id"
+    )
     enable_chronicle(db.conn, "dogs")
-    dogs.upsert({"id": 1, "name": "Cleo", "color": "black"})
-    assert chronicle_dogs.count == 1
+    dogs.insert({"id": 1, "name": "Cleo", "color": "black"})
     dogs.upsert({"id": 2, "name": "Pancakes", "color": "corgi"})
-    assert chronicle_dogs.count == 2
 
     def chronicle_rows():
-        return list(db.query("select id, version from _chronicle_dogs order by id"))
+        return list(
+            db.query("select id, __version as version from _chronicle_dogs order by id")
+        )
 
-    assert chronicle_rows() == [{"id": 1, "version": 2}, {"id": 2, "version": 3}]
+    assert chronicle_rows() == [{"id": 1, "version": 1}, {"id": 2, "version": 2}]
 
     # Upsert that should update the row
     dogs.upsert({"id": 1, "name": "Cleo", "color": "brown"})
-    assert chronicle_rows() == [{"id": 1, "version": 4}, {"id": 2, "version": 3}]
+    assert chronicle_rows() == [{"id": 1, "version": 3}, {"id": 2, "version": 2}]
 
     # Upsert that should be a no-op
     dogs.upsert({"id": 1, "name": "Cleo", "color": "brown"})
-    assert chronicle_rows() == [{"id": 1, "version": 4}, {"id": 2, "version": 3}]
+    assert chronicle_rows() == [{"id": 1, "version": 3}, {"id": 2, "version": 2}]
