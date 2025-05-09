@@ -88,6 +88,11 @@ Any time you call this you should track the last `version` number that you see, 
 
 Note that if a row had multiple updates in between calls to this function you will still only see one `Change` object for that row - the `updated_ms` and `version` will reflect the most recent update.
 
+## Implementation notes
+
+- If you run `INSERT OR REPLACE INTO ...` and update an existing record in a way that does not change any of the fields, this system will still treat that record as if it has been updated. Use `INSERT ... ON CONFLICT SET` upserts instead to avoid this problem.
+- Updates to columns that are part of a primary key for the record is not currently supported.
+
 ## Potential applications
 
 Chronicle tables can be used to efficiently answer the question "what rows have been inserted, updated or deleted since I last checked" - by looking at the `version` column which has an index to make it fast to answer that question.
