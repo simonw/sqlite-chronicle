@@ -13,11 +13,11 @@ def test_enable_chronicle(table_name, pks):
     db[table_name].insert_all(
         [
             {"id": 1, "name": "Cleo", "color": "black"},
-            {"id": 2, "name": "Pancakes", "color": "corgi"},
         ],
         pk=pks[0] if len(pks) == 1 else pks,
     )
     enable_chronicle(db.conn, table_name)
+    db[table_name].insert({"id": 2, "name": "Pancakes", "color": "corgi"})
     # It should have the same primary keys
     assert db[chronicle_table].pks == pks
     # Should also have updated_ms and deleted columns
@@ -64,6 +64,10 @@ def test_enable_chronicle(table_name, pks):
         ]
     rows = list(db[chronicle_table].rows)
     assert rows == expected
+    for row in rows:
+        assert row["__added_ms"] != 0
+        assert row["__updated_ms"] != 0
+        assert row["__added_ms"] == row["__updated_ms"]
     # Running it again should do nothing because table exists
     enable_chronicle(db.conn, table_name)
     # Insert a row

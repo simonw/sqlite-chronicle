@@ -81,7 +81,7 @@ def test_updates_since(db):
         Change(
             pks=(3,),
             added_ms=ANY,
-            updated_ms=0,
+            updated_ms=ANY,
             version=3,
             row={"id": 3, "name": "The lost city of Atlantis", "year": "360 BC"},
             deleted=False,

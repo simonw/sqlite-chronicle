@@ -155,7 +155,8 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
               )
               VALUES (
                 {', '.join(f'NEW."{col}"' for col in primary_key_names)},
-                {current_timestamp_expr}, 0, {next_version_expr}, 0
+                {current_timestamp_expr}, {current_timestamp_expr},
+                {next_version_expr}, 0
               );
             END;
         """
