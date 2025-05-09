@@ -59,7 +59,7 @@ def test_updates_since(db):
                 "name": "The fate of the crew on the Mary Celeste",
                 "year": "1872",
             },
-            deleted=0,
+            deleted=False,
         ),
         Change(
             pks=(2,),
@@ -71,7 +71,7 @@ def test_updates_since(db):
                 "name": "The disappearance of the Amber Room",
                 "year": "1941",
             },
-            deleted=0,
+            deleted=False,
         ),
     ]
     last = changes[-1].version
@@ -81,10 +81,10 @@ def test_updates_since(db):
         Change(
             pks=(3,),
             added_ms=ANY,
-            updated_ms=ANY,
+            updated_ms=0,
             version=3,
             row={"id": 3, "name": "The lost city of Atlantis", "year": "360 BC"},
-            deleted=0,
+            deleted=False,
         )
     ]
     last2 = new_changes[-1].version
@@ -101,7 +101,7 @@ def test_updates_since(db):
                 "name": "The fate of the crew on the Mary Celeste",
                 "year": "unknown",
             },
-            deleted=0,
+            deleted=False,
         ),
         Change(
             pks=(3,),
@@ -109,7 +109,7 @@ def test_updates_since(db):
             updated_ms=ANY,
             version=5,
             row={"id": 3, "name": "The lost city of Atlantis", "year": "unknown"},
-            deleted=0,
+            deleted=False,
         ),
     ]
     last3 = new_changes2[-1].version
@@ -122,7 +122,7 @@ def test_updates_since(db):
             updated_ms=ANY,
             version=6,
             row={"id": 2, "name": None, "year": None},
-            deleted=1,
+            deleted=True,
         )
     ]
 
@@ -144,12 +144,12 @@ def test_updates_since_more_rows_than_batch_size_in_an_update():
         ({"id": i, "name": "Name {}".format(i)} for i in range(201)), pk="id"
     )
     enable_chronicle(db.conn, "mysteries")
-    since_id = db.execute("select max(version) from _chronicle_mysteries").fetchone()[0]
+    max_v = db.execute("select max(__version) from _chronicle_mysteries").fetchone()[0]
     # Update them all in one go
     with db.conn:
         db.execute("update mysteries set name = 'Updated'")
 
-    changes = list(updates_since(db.conn, "mysteries", batch_size=100, since=since_id))
+    changes = list(updates_since(db.conn, "mysteries", batch_size=100, since=max_v))
     assert len(changes) == 201
     # Each change should have a different version
     assert len(set(c.version for c in changes)) == 201

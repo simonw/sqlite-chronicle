@@ -20,12 +20,6 @@ class Change:
     deleted: bool
 
 
-import sqlite3
-import secrets
-import textwrap
-from typing import List
-
-
 class ChronicleError(Exception):
     pass
 
@@ -119,17 +113,28 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     )
 
     # 2) Seed chronicle table with existing rows
+    version_expr = (
+        f"ROW_NUMBER() OVER (ORDER BY "
+        + ", ".join(f'"{col}"' for col in primary_key_names)
+        + ")"
+    )
+
     cols_insert = (
         ", ".join(f'"{col}"' for col in primary_key_names)
         + ", __added_ms, __updated_ms, __version, __deleted"
     )
     cols_select = (
         ", ".join(f'"{col}"' for col in primary_key_names)
-        + f", {current_timestamp_expr} AS __added_ms, {current_timestamp_expr} AS __updated_ms, 1 AS __version, 0 AS __deleted"
+        + f", {current_timestamp_expr} AS __added_ms"
+        + f", {current_timestamp_expr} AS __updated_ms"
+        + f", {version_expr} AS __version"
+        + ", 0 AS __deleted"
     )
+
     sql_statements.append(
         f'INSERT INTO "{chronicle_table}" ({cols_insert})\n'
-        f'SELECT {cols_select} FROM "{table_name}";'
+        f" SELECT {cols_select}\n"
+        f'   FROM "{table_name}";'
     )
 
     # 3) AFTER INSERT trigger
