@@ -18,10 +18,6 @@ class Change:
     deleted: bool
 
 
-class ChronicleError(Exception):
-    pass
-
-
 def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     """
     Turn on chronicle tracking for `table_name`.
