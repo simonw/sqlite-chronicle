@@ -70,7 +70,7 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
         "CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER)"
     )
     next_version_expr = (
-        f"COALESCE((SELECT MAX(__version) FROM {chronicle_table}), 0) + 1"
+        f'COALESCE((SELECT MAX(__version) FROM "{chronicle_table}"), 0) + 1'
     )
 
     # Build trigger WHEN condition: any non-PK column changed
@@ -98,7 +98,7 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     sql_statements.append(
         textwrap.dedent(
             f"""
-            CREATE TABLE {chronicle_table} (
+            CREATE TABLE "{chronicle_table}" (
               {pk_definitions},
               __added_ms   INTEGER,
               __updated_ms INTEGER,
@@ -112,8 +112,8 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     sql_statements.append(
         textwrap.dedent(
             f"""
-            CREATE INDEX {chronicle_table}__version_idx
-              ON {chronicle_table}(__version);
+            CREATE INDEX "{chronicle_table}__version_idx"
+              ON "{chronicle_table}"(__version);
         """
         ).strip()
     )
@@ -128,7 +128,7 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
         + f", {current_timestamp_expr} AS __added_ms, {current_timestamp_expr} AS __updated_ms, 1 AS __version, 0 AS __deleted"
     )
     sql_statements.append(
-        f"INSERT INTO {chronicle_table} ({cols_insert})\n"
+        f'INSERT INTO "{chronicle_table}" ({cols_insert})\n'
         f'SELECT {cols_select} FROM "{table_name}";'
     )
 
@@ -136,11 +136,11 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     sql_statements.append(
         textwrap.dedent(
             f"""
-            CREATE TRIGGER chronicle_{table_name}_ai
+            CREATE TRIGGER "chronicle_{table_name}_ai"
             AFTER INSERT ON "{table_name}"
             FOR EACH ROW
             BEGIN
-              INSERT OR IGNORE INTO {chronicle_table} (
+              INSERT OR IGNORE INTO "{chronicle_table}" (
                 {', '.join(f'"{col}"' for col in primary_key_names)},
                 __added_ms, __updated_ms, __version, __deleted
               )
@@ -157,12 +157,12 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     sql_statements.append(
         textwrap.dedent(
             f"""
-            CREATE TRIGGER chronicle_{table_name}_au
+            CREATE TRIGGER "chronicle_{table_name}_au"
             AFTER UPDATE ON "{table_name}"
             FOR EACH ROW
             WHEN {update_condition}
             BEGIN
-              UPDATE {chronicle_table}
+              UPDATE "{chronicle_table}"
                 SET __updated_ms = {current_timestamp_expr},
                     __version    = {next_version_expr}
               WHERE {primary_key_match_clause};
@@ -176,11 +176,11 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     sql_statements.append(
         textwrap.dedent(
             f"""
-            CREATE TRIGGER chronicle_{table_name}_ad
+            CREATE TRIGGER "chronicle_{table_name}_ad"
             AFTER DELETE ON "{table_name}"
             FOR EACH ROW
             BEGIN
-              UPDATE {chronicle_table}
+              UPDATE "{chronicle_table}"
                 SET __updated_ms = {current_timestamp_expr},
                     __version    = {next_version_expr},
                     __deleted    = 1
