@@ -125,10 +125,10 @@ CREATE TABLE dogs (id integer primary key, name text, age integer);
 
 CREATE TABLE "_chronicle_dogs" (
   "id" INTEGER,
-  __added_ms   INTEGER,
+  __added_ms INTEGER,
   __updated_ms INTEGER,
-  __version    INTEGER,
-  __deleted    INTEGER DEFAULT 0,
+  __version INTEGER,
+  __deleted INTEGER DEFAULT 0,
   PRIMARY KEY("id")
 );
 
@@ -140,13 +140,13 @@ AFTER INSERT ON "dogs"
 FOR EACH ROW
 BEGIN
   INSERT OR IGNORE INTO "_chronicle_dogs" (
-    "id",
-    __added_ms, __updated_ms, __version, __deleted
-  )
-  VALUES (
+    "id", __added_ms, __updated_ms, __version, __deleted
+  ) VALUES (
     NEW."id",
-    CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER), CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER),
-    COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"), 0) + 1, 0
+    CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),
+    CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),
+    COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1,
+    0
   );
 END;
 
@@ -156,9 +156,9 @@ FOR EACH ROW
 WHEN OLD."name" IS NOT NEW."name" OR OLD."age" IS NOT NEW."age"
 BEGIN
   UPDATE "_chronicle_dogs"
-    SET __updated_ms = CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER),
-        __version    = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"), 0) + 1
-  WHERE "id" = NEW."id";
+  SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),
+    __version = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1
+  WHERE "id"=NEW."id";
 END;
 
 CREATE TRIGGER "chronicle_dogs_ad"
@@ -166,10 +166,10 @@ AFTER DELETE ON "dogs"
 FOR EACH ROW
 BEGIN
   UPDATE "_chronicle_dogs"
-    SET __updated_ms = CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER),
-        __version    = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"), 0) + 1,
-        __deleted    = 1
-  WHERE "id" = OLD."id";
+    SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),
+      __version = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1,
+      __deleted = 1
+  WHERE "id"=OLD."id";
 END
 
 ```

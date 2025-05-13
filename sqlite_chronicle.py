@@ -92,10 +92,10 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
             f"""
             CREATE TABLE "{chronicle_table}" (
               {pk_definitions},
-              __added_ms   INTEGER,
+              __added_ms INTEGER,
               __updated_ms INTEGER,
-              __version    INTEGER,
-              __deleted    INTEGER DEFAULT 0,
+              __version INTEGER,
+              __deleted INTEGER DEFAULT 0,
               PRIMARY KEY({pk_constraint})
             )
         """
@@ -135,69 +135,108 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
         f'   FROM "{table_name}";'
     )
 
-    # 3) AFTER INSERT trigger
-    sql_statements.append(
-        textwrap.dedent(
-            f"""
-            CREATE TRIGGER "chronicle_{table_name}_ai"
-            AFTER INSERT ON "{table_name}"
-            FOR EACH ROW
-            BEGIN
-              INSERT OR IGNORE INTO "{chronicle_table}" (
-                {', '.join(f'"{col}"' for col in primary_key_names)},
-                __added_ms, __updated_ms, __version, __deleted
-              )
-              VALUES (
-                {', '.join(f'NEW."{col}"' for col in primary_key_names)},
-                {current_timestamp_expr}, {current_timestamp_expr},
-                {next_version_expr}, 0
-              );
-            END;
-        """
-        ).strip()
-    )
-
-    # 4) AFTER UPDATE trigger (only if real change)
-    sql_statements.append(
-        textwrap.dedent(
-            f"""
-            CREATE TRIGGER "chronicle_{table_name}_au"
-            AFTER UPDATE ON "{table_name}"
-            FOR EACH ROW
-            WHEN {update_condition}
-            BEGIN
-              UPDATE "{chronicle_table}"
-                SET __updated_ms = {current_timestamp_expr},
-                    __version    = {next_version_expr}
-              WHERE {primary_key_match_clause};
-            END;
-        """
-        ).strip()
-    )
-
-    # 5) AFTER DELETE trigger
-    pk_old_match = " AND ".join(f'"{col}" = OLD."{col}"' for col in primary_key_names)
-    sql_statements.append(
-        textwrap.dedent(
-            f"""
-            CREATE TRIGGER "chronicle_{table_name}_ad"
-            AFTER DELETE ON "{table_name}"
-            FOR EACH ROW
-            BEGIN
-              UPDATE "{chronicle_table}"
-                SET __updated_ms = {current_timestamp_expr},
-                    __version    = {next_version_expr},
-                    __deleted    = 1
-              WHERE {pk_old_match};
-            END;
-        """
-        ).strip()
-    )
+    sql_statements.extend(_chronicle_triggers(conn, table_name))
 
     # Execute all statements within a transaction
     with conn:
         for stmt in sql_statements:
             cursor.execute(stmt)
+
+
+def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
+    """
+    Return SQL statements to create chronicle triggers for the given table.
+    """
+    chron = f"_chronicle_{table_name}"
+    cur = conn.cursor()
+
+    # get pk / non‐pk column lists from the primary table
+    cur.execute(f'PRAGMA table_info("{table_name}")')
+    info = cur.fetchall()
+    pks = [r[1] for r in info if r[5]]
+    nonpks = [r[1] for r in info if not r[5]]
+    if not pks:
+        raise ChronicleError(
+            f"{table_name!r} has no PRIMARY KEY, cannot create triggers"
+        )
+
+    # some common expressions
+    ts = "CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER)"
+    nextv = f'COALESCE((SELECT MAX(__version) FROM "{chron}"),0) + 1'
+
+    pk_list = ", ".join(f'"{c}"' for c in pks)
+    new_pk_list = ", ".join(f'NEW."{c}"' for c in pks)
+    match_new = " AND ".join(f'"{c}"=NEW."{c}"' for c in pks)
+    match_old = " AND ".join(f'"{c}"=OLD."{c}"' for c in pks)
+
+    # build an UPDATE‐only‐if‐really‐changed clause
+    if nonpks:
+        cond = " OR ".join(f'OLD."{c}" IS NOT NEW."{c}"' for c in nonpks)
+        when = f"WHEN {cond}"
+    else:
+        when = ""
+
+    stmts: List[str] = []
+
+    # AFTER INSERT
+    stmts.append(
+        textwrap.dedent(
+            f"""
+    CREATE TRIGGER "chronicle_{table_name}_ai"
+    AFTER INSERT ON "{table_name}"
+    FOR EACH ROW
+    BEGIN
+      INSERT OR IGNORE INTO "{chron}" (
+        {pk_list}, __added_ms, __updated_ms, __version, __deleted
+      ) VALUES (
+        {new_pk_list},
+        {ts},
+        {ts},
+        {nextv},
+        0
+      );
+    END;
+    """
+        ).strip()
+    )
+
+    # AFTER UPDATE
+    stmts.append(
+        textwrap.dedent(
+            f"""
+    CREATE TRIGGER "chronicle_{table_name}_au"
+    AFTER UPDATE ON "{table_name}"
+    FOR EACH ROW
+    {when}
+    BEGIN
+      UPDATE "{chron}"
+      SET __updated_ms = {ts},
+        __version = {nextv}
+      WHERE {match_new};
+    END;
+    """
+        ).strip()
+    )
+
+    # AFTER DELETE
+    stmts.append(
+        textwrap.dedent(
+            f"""
+    CREATE TRIGGER "chronicle_{table_name}_ad"
+    AFTER DELETE ON "{table_name}"
+    FOR EACH ROW
+    BEGIN
+      UPDATE "{chron}"
+        SET __updated_ms = {ts},
+          __version = {nextv},
+          __deleted = 1
+      WHERE {match_old};
+    END;
+    """
+        ).strip()
+    )
+
+    return stmts
 
 
 def updates_since(
