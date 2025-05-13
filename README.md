@@ -52,6 +52,10 @@ The end result is a chronicle table that looks something like this:
 |   2 | 1694408825192 | 1694408825192 | 5 |      0 |
 |   3 | 1694408825192 | 1694408825192 | 6 |      0 |
 
+## upgrade_chronicle(conn, table_name)
+
+This function detects if the specified table has previously had an older version of the chronicle table and triggers created for it, and if so it will upgrade that table to the latest implementation, preserving existing timestamp and version data.
+
 ### updates_since(conn, table_name, since=None, batch_size=1000)
 
 The `sqlite_chronicle.updates_since()` function returns a generator over a list of `Change` objects.

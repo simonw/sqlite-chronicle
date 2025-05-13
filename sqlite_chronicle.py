@@ -235,8 +235,55 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     """
         ).strip()
     )
-
     return stmts
+
+
+def upgrade_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
+    """
+    Migrate a *legacy* chronicle table:
+
+    - If _chronicle_<table_name> does not exist → no-op
+    - If it *does* exist and still has columns named
+      added_ms, updated_ms, version, deleted then migrate to new table
+    """
+    chron = f"_chronicle_{table_name}"
+    cur = conn.cursor()
+
+    # Does the chronicle table even exist?
+    cur.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (chron,),
+    )
+    if not cur.fetchone():
+        return
+
+    # Inspect its columns, bail if we're already on the new schema
+    cur.execute(f'PRAGMA table_info("{chron}")')
+    cols = [r[1] for r in cur.fetchall()]
+    if "added_ms" not in cols:
+        return  # already migrated
+
+    # Build an ALTER + DROP + CREATE script
+    script = f"""
+    DROP INDEX IF EXISTS "{chron}_version";
+
+    DROP TRIGGER IF EXISTS "_chronicle_{table_name}_ai";
+    DROP TRIGGER IF EXISTS "_chronicle_{table_name}_au";
+    DROP TRIGGER IF EXISTS "_chronicle_{table_name}_ad";
+
+    ALTER TABLE "{chron}" RENAME COLUMN added_ms TO __added_ms;
+    ALTER TABLE "{chron}" RENAME COLUMN updated_ms TO __updated_ms;
+    ALTER TABLE "{chron}" RENAME COLUMN version TO __version;
+    ALTER TABLE "{chron}" RENAME COLUMN deleted TO __deleted;
+
+    CREATE INDEX IF NOT EXISTS "{chron}__version_idx"
+        ON "{chron}"(__version);
+    """
+    with conn:
+        conn.executescript(script)
+        # 4) re‐create the new triggers
+        for stmt in _chronicle_triggers(conn, table_name):
+            conn.execute(stmt)
 
 
 def updates_since(
