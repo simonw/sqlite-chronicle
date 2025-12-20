@@ -384,7 +384,7 @@ def updates_since(
     sql = textwrap.dedent(
         f"""
         SELECT {select}
-          FROM {chron} AS c
+          FROM "{chron}" AS c
           LEFT JOIN "{table_name}" AS t
             ON {join}
          WHERE c.__version > ?
