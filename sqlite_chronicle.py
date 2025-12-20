@@ -146,6 +146,11 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
 def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     """
     Return SQL statements to create chronicle triggers for the given table.
+
+    Creates three triggers:
+    - chronicle_{table}_ai: AFTER INSERT - records new rows with timestamp and version
+    - chronicle_{table}_au: AFTER UPDATE - updates timestamp/version when non-PK columns change
+    - chronicle_{table}_ad: AFTER DELETE - marks rows as deleted with updated timestamp/version
     """
     chron = f"_chronicle_{table_name}"
     cur = conn.cursor()
@@ -358,8 +363,17 @@ def updates_since(
     batch_size: int = 1000,
 ) -> Generator[Change, None, None]:
     """
-    Yields Change(pks, added_ms, updated_ms, version, row, deleted)
-    for every chronicle.version > since, in ascending order.
+    Yield Change objects for all rows modified since a given version.
+
+    Args:
+        conn: SQLite database connection
+        table_name: Name of the table to get changes for
+        since: Version number to start from (exclusive). If None, returns all changes.
+        batch_size: Number of rows to fetch per database query (for pagination)
+
+    Yields:
+        Change objects with pks, added_ms, updated_ms, version, row, and deleted fields.
+        Results are ordered by version ascending.
     """
     cur = conn.cursor()
     cur.row_factory = sqlite3.Row
@@ -416,6 +430,15 @@ def updates_since(
 
 
 def cli_main(argv=None) -> int:
+    """
+    Command-line interface for enabling/disabling chronicle tracking.
+
+    Args:
+        argv: Command-line arguments (defaults to sys.argv if None)
+
+    Returns:
+        Exit code: 0 on success, 1 if any errors occurred
+    """
     import argparse
     import sys
 
