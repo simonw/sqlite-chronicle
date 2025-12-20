@@ -1,7 +1,7 @@
 import dataclasses
 import sqlite3
 import textwrap
-from typing import Generator, Optional, List
+from typing import Any, Generator, Optional, List, Tuple, Dict
 
 
 class ChronicleError(Exception):
@@ -10,11 +10,11 @@ class ChronicleError(Exception):
 
 @dataclasses.dataclass
 class Change:
-    pks: tuple
+    pks: Tuple[Any, ...]
     added_ms: int
     updated_ms: int
     version: int
-    row: dict
+    row: Dict[str, Any]
     deleted: bool
 
 
@@ -376,7 +376,7 @@ def updates_since(
         Results are ordered by version ascending.
     """
     cur = conn.cursor()
-    cur.row_factory = sqlite3.Row
+    cur.row_factory = sqlite3.Row  # type: ignore[assignment]
     if since is None:
         since = 0
 
@@ -429,7 +429,7 @@ def updates_since(
             )
 
 
-def cli_main(argv=None) -> int:
+def cli_main(argv: Optional[List[str]] = None) -> int:
     """
     Command-line interface for enabling/disabling chronicle tracking.
 

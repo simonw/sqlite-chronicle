@@ -148,7 +148,7 @@ Note that if a row had multiple updates in between calls to this function you wi
 
 ## Implementation notes
 
-- If you run `INSERT OR REPLACE INTO ...` and update an existing record in a way that does not change any of the fields, this system will still treat that record as if it has been updated. Use `INSERT ... ON CONFLICT SET` upserts instead to avoid this problem.
+- If you run `INSERT OR REPLACE INTO ...` and update an existing record in a way that does not change any of the fields, this system will still treat that record as if it has been updated. Use `INSERT ... ON CONFLICT DO UPDATE` upserts instead to avoid this problem.
 - Updates to columns that are part of a primary key for the record is not currently supported.
 
 ## Potential applications
