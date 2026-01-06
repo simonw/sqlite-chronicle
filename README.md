@@ -147,8 +147,8 @@ BEGIN
     "id", __added_ms, __updated_ms, __version, __deleted
   ) VALUES (
     NEW."id",
-    CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),
-    CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),
+    CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER),
+    CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER),
     COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1,
     0
   );
@@ -160,7 +160,7 @@ FOR EACH ROW
 WHEN OLD."name" IS NOT NEW."name" OR OLD."age" IS NOT NEW."age"
 BEGIN
   UPDATE "_chronicle_dogs"
-  SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),
+  SET __updated_ms = CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER),
     __version = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1
   WHERE "id"=NEW."id";
 END;
@@ -170,7 +170,7 @@ AFTER DELETE ON "dogs"
 FOR EACH ROW
 BEGIN
   UPDATE "_chronicle_dogs"
-    SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),
+    SET __updated_ms = CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER),
       __version = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1,
       __deleted = 1
   WHERE "id"=OLD."id";
