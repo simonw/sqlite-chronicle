@@ -8,6 +8,18 @@ class ChronicleError(Exception):
     pass
 
 
+# SQL expression for current timestamp in milliseconds since Unix epoch
+CURRENT_TIMESTAMP_MS_EXPR = (
+    "CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER)"
+)
+
+# Chronicle table column names
+ADDED_MS_COL = "__added_ms"
+UPDATED_MS_COL = "__updated_ms"
+VERSION_COL = "__version"
+DELETED_COL = "__deleted"
+
+
 @dataclasses.dataclass
 class Change:
     pks: tuple
@@ -57,12 +69,9 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     non_pk_columns = [row[1] for row in table_info if not row[5]]
     primary_key_names = [col for col, _ in primary_key_columns]
 
-    # SQL expressions for timestamps and versioning
-    current_timestamp_expr = (
-        "CAST((julianday('now') - 2440587.5) * 86400 * 1000 AS INTEGER)"
-    )
+    # SQL expression for next version number
     next_version_expr = (
-        f'COALESCE((SELECT MAX(__version) FROM "{chronicle_table}"), 0) + 1'
+        f'COALESCE((SELECT MAX({VERSION_COL}) FROM "{chronicle_table}"), 0) + 1'
     )
 
     # Build trigger WHEN condition: any non-PK column changed
@@ -92,10 +101,10 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
             f"""
             CREATE TABLE "{chronicle_table}" (
               {pk_definitions},
-              __added_ms INTEGER,
-              __updated_ms INTEGER,
-              __version INTEGER,
-              __deleted INTEGER DEFAULT 0,
+              {ADDED_MS_COL} INTEGER,
+              {UPDATED_MS_COL} INTEGER,
+              {VERSION_COL} INTEGER,
+              {DELETED_COL} INTEGER DEFAULT 0,
               PRIMARY KEY({pk_constraint})
             )
         """
@@ -105,7 +114,7 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
         textwrap.dedent(
             f"""
             CREATE INDEX "{chronicle_table}__version_idx"
-              ON "{chronicle_table}"(__version);
+              ON "{chronicle_table}"({VERSION_COL});
         """
         ).strip()
     )
@@ -119,14 +128,14 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
 
     cols_insert = (
         ", ".join(f'"{col}"' for col in primary_key_names)
-        + ", __added_ms, __updated_ms, __version, __deleted"
+        + f", {ADDED_MS_COL}, {UPDATED_MS_COL}, {VERSION_COL}, {DELETED_COL}"
     )
     cols_select = (
         ", ".join(f'"{col}"' for col in primary_key_names)
-        + f", {current_timestamp_expr} AS __added_ms"
-        + f", {current_timestamp_expr} AS __updated_ms"
-        + f", {version_expr} AS __version"
-        + ", 0 AS __deleted"
+        + f", {CURRENT_TIMESTAMP_MS_EXPR} AS {ADDED_MS_COL}"
+        + f", {CURRENT_TIMESTAMP_MS_EXPR} AS {UPDATED_MS_COL}"
+        + f", {version_expr} AS {VERSION_COL}"
+        + f", 0 AS {DELETED_COL}"
     )
 
     sql_statements.append(
@@ -160,9 +169,8 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
             f"{table_name!r} has no PRIMARY KEY, cannot create triggers"
         )
 
-    # some common expressions
-    ts = "CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER)"
-    nextv = f'COALESCE((SELECT MAX(__version) FROM "{chron}"),0) + 1'
+    # SQL expression for next version number
+    nextv = f'COALESCE((SELECT MAX({VERSION_COL}) FROM "{chron}"),0) + 1'
 
     pk_list = ", ".join(f'"{c}"' for c in pks)
     new_pk_list = ", ".join(f'NEW."{c}"' for c in pks)
@@ -187,11 +195,11 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     FOR EACH ROW
     BEGIN
       INSERT OR IGNORE INTO "{chron}" (
-        {pk_list}, __added_ms, __updated_ms, __version, __deleted
+        {pk_list}, {ADDED_MS_COL}, {UPDATED_MS_COL}, {VERSION_COL}, {DELETED_COL}
       ) VALUES (
         {new_pk_list},
-        {ts},
-        {ts},
+        {CURRENT_TIMESTAMP_MS_EXPR},
+        {CURRENT_TIMESTAMP_MS_EXPR},
         {nextv},
         0
       );
@@ -210,8 +218,8 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     {when}
     BEGIN
       UPDATE "{chron}"
-      SET __updated_ms = {ts},
-        __version = {nextv}
+      SET {UPDATED_MS_COL} = {CURRENT_TIMESTAMP_MS_EXPR},
+        {VERSION_COL} = {nextv}
       WHERE {match_new};
     END;
     """
@@ -227,9 +235,9 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     FOR EACH ROW
     BEGIN
       UPDATE "{chron}"
-        SET __updated_ms = {ts},
-          __version = {nextv},
-          __deleted = 1
+        SET {UPDATED_MS_COL} = {CURRENT_TIMESTAMP_MS_EXPR},
+          {VERSION_COL} = {nextv},
+          {DELETED_COL} = 1
       WHERE {match_old};
     END;
     """
@@ -312,7 +320,7 @@ def updates_since(
     pks = ", ".join(f'c."{c}"' for c in pk_names)
     originals = ", ".join(f't."{c}"' for c in non_pk)
     select = ", ".join(
-        [pks, originals, "c.__added_ms", "c.__updated_ms", "c.__version", "c.__deleted"]
+        [pks, originals, f"c.{ADDED_MS_COL}", f"c.{UPDATED_MS_COL}", f"c.{VERSION_COL}", f"c.{DELETED_COL}"]
     )
     join = " AND ".join(f'c."{c}" = t."{c}"' for c in pk_names)
 
@@ -322,8 +330,8 @@ def updates_since(
           FROM {chron} AS c
           LEFT JOIN "{table_name}" AS t
             ON {join}
-         WHERE c.__version > ?
-         ORDER BY c.__version
+         WHERE c.{VERSION_COL} > ?
+         ORDER BY c.{VERSION_COL}
          LIMIT {batch_size}
         """
     ).strip()
@@ -333,20 +341,20 @@ def updates_since(
         if not rows:
             break
         for r in rows:
-            since = r["__version"]
+            since = r[VERSION_COL]
             # build row dict of original columns
             row = {
                 c: r[c]
                 for c in r.keys()
-                if c not in ("__added_ms", "__updated_ms", "__version", "__deleted")
+                if c not in (ADDED_MS_COL, UPDATED_MS_COL, VERSION_COL, DELETED_COL)
             }
             yield Change(
                 pks=tuple(r[c] for c in pk_names),
-                added_ms=r["__added_ms"],
-                updated_ms=r["__updated_ms"],
-                version=r["__version"],
+                added_ms=r[ADDED_MS_COL],
+                updated_ms=r[UPDATED_MS_COL],
+                version=r[VERSION_COL],
                 row=row,
-                deleted=bool(r["__deleted"]),
+                deleted=bool(r[DELETED_COL]),
             )
 
 

@@ -118,6 +118,35 @@ def test_enable_chronicle_alternative_primary_keys(pks):
     assert db["_chronicle_dogs"].pks == pks
 
 
+def test_enable_chronicle_empty_table():
+    """Test that enable_chronicle works on an empty table with no rows."""
+    db = sqlite_utils.Database(memory=True)
+    # Create an empty table with a schema but no rows
+    db.execute("CREATE TABLE empty_dogs (id INTEGER PRIMARY KEY, name TEXT, color TEXT)")
+
+    # Enable chronicle on the empty table
+    enable_chronicle(db.conn, "empty_dogs")
+
+    # Verify chronicle table was created with correct structure
+    chronicle_table = "_chronicle_empty_dogs"
+    assert chronicle_table in db.table_names()
+    assert db[chronicle_table].pks == ["id"]
+    assert set(db[chronicle_table].columns_dict.keys()) == {
+        "id", "__added_ms", "__updated_ms", "__version", "__deleted"
+    }
+
+    # Verify chronicle table is empty (no rows to seed from)
+    assert list(db[chronicle_table].rows) == []
+
+    # Verify triggers work when we insert a new row
+    db["empty_dogs"].insert({"id": 1, "name": "Cleo", "color": "black"})
+    chronicle_rows = list(db[chronicle_table].rows)
+    assert len(chronicle_rows) == 1
+    assert chronicle_rows[0]["id"] == 1
+    assert chronicle_rows[0]["__version"] == 1
+    assert chronicle_rows[0]["__deleted"] == 0
+
+
 def test_upsert():
     db = sqlite_utils.Database(memory=True)
     dogs = db.table("dogs", pk="id").create(

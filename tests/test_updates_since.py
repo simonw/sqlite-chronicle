@@ -153,3 +153,73 @@ def test_updates_since_more_rows_than_batch_size_in_an_update():
     assert len(changes) == 201
     # Each change should have a different version
     assert len(set(c.version for c in changes)) == 201
+
+
+def test_updates_since_batch_size_equals_rows():
+    """Test batch_size exactly matching the number of rows."""
+    db = Database(memory=True)
+    db["items"].insert_all(
+        [{"id": i, "name": f"Item {i}"} for i in range(10)], pk="id"
+    )
+    enable_chronicle(db.conn, "items")
+
+    # batch_size equals row count
+    changes = list(updates_since(db.conn, "items", batch_size=10))
+    assert len(changes) == 10
+    assert [c.version for c in changes] == list(range(1, 11))
+
+
+def test_updates_since_batch_size_one():
+    """Test with batch_size=1 to ensure pagination works correctly."""
+    db = Database(memory=True)
+    db["items"].insert_all(
+        [{"id": i, "name": f"Item {i}"} for i in range(5)], pk="id"
+    )
+    enable_chronicle(db.conn, "items")
+
+    # batch_size of 1 should still return all rows
+    changes = list(updates_since(db.conn, "items", batch_size=1))
+    assert len(changes) == 5
+    # Verify ordering is correct
+    assert [c.version for c in changes] == [1, 2, 3, 4, 5]
+    # Verify each row has correct data
+    for i, change in enumerate(changes):
+        assert change.pks == (i,)
+        assert change.row["name"] == f"Item {i}"
+
+
+def test_updates_since_batch_size_larger_than_rows():
+    """Test with batch_size larger than total rows."""
+    db = Database(memory=True)
+    db["items"].insert_all(
+        [{"id": i, "name": f"Item {i}"} for i in range(3)], pk="id"
+    )
+    enable_chronicle(db.conn, "items")
+
+    # batch_size much larger than row count
+    changes = list(updates_since(db.conn, "items", batch_size=1000))
+    assert len(changes) == 3
+
+
+def test_updates_since_empty_table():
+    """Test updates_since on a table with no changes."""
+    db = Database(memory=True)
+    db.execute("CREATE TABLE empty_items (id INTEGER PRIMARY KEY, name TEXT)")
+    enable_chronicle(db.conn, "empty_items")
+
+    # Should return empty list for empty chronicle
+    changes = list(updates_since(db.conn, "empty_items"))
+    assert changes == []
+
+
+def test_updates_since_with_since_beyond_max_version():
+    """Test updates_since with since parameter beyond the max version."""
+    db = Database(memory=True)
+    db["items"].insert_all(
+        [{"id": i, "name": f"Item {i}"} for i in range(5)], pk="id"
+    )
+    enable_chronicle(db.conn, "items")
+
+    # since=1000 is way beyond max version (5)
+    changes = list(updates_since(db.conn, "items", since=1000))
+    assert changes == []
