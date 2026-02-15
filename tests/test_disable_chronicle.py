@@ -40,11 +40,12 @@ def test_disable_chronicle_removes_table_and_triggers():
     assert "chronicle_dogs_au" not in triggers
     assert "chronicle_dogs_ad" not in triggers
 
-    # Verify indexes are gone
+    # Verify indexes are gone (exclude shared _chroniclesnapshots autoindex)
     indexes = [
         r[0]
         for r in db.execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE '%chronicle%'"
+            " AND name NOT LIKE '%_chroniclesnapshots%'"
         ).fetchall()
     ]
     assert indexes == []

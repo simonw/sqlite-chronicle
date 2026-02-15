@@ -136,11 +136,10 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
         f'   FROM "{table_name}";'
     )
 
-    # Snapshot table for INSERT OR REPLACE support
-    snapshot_table = f"_chronicle_snapshot_{table_name}"
+    # Shared snapshot table for INSERT OR REPLACE support
     sql_statements.append(
-        f'CREATE TABLE IF NOT EXISTS "{snapshot_table}" '
-        f"(key TEXT PRIMARY KEY, value TEXT)"
+        'CREATE TABLE IF NOT EXISTS "_chroniclesnapshots" '
+        "(table_name TEXT, key TEXT, value TEXT, PRIMARY KEY(table_name, key))"
     )
 
     sql_statements.extend(_chronicle_triggers(conn, table_name))
@@ -162,7 +161,8 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     an ``INSERT OR REPLACE`` on the main table.
     """
     chron = f"_chronicle_{table_name}"
-    snap = f"_chronicle_snapshot_{table_name}"
+    snap = "_chroniclesnapshots"
+    escaped_name = table_name.replace("'", "''")
     cur = conn.cursor()
 
     # get pk / non‐pk column lists from the primary table
@@ -202,7 +202,7 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
             + ", ".join(f'quote("{c}")' for c in nonpks)
             + f') FROM "{table_name}" WHERE {match_new})'
         )
-        snap_json = f'(SELECT value FROM "{snap}" WHERE key = {snap_key})'
+        snap_json = f"(SELECT value FROM \"{snap}\" WHERE table_name = '{escaped_name}' AND key = {snap_key})"
         update_when = " OR ".join(f'OLD."{c}" IS NOT NEW."{c}"' for c in nonpks)
     else:
         new_json = "'[]'"
@@ -221,8 +221,8 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     FOR EACH ROW
     WHEN EXISTS(SELECT 1 FROM "{table_name}" WHERE {match_new})
     BEGIN
-      INSERT OR REPLACE INTO "{snap}"(key, value)
-      VALUES({snap_key}, {table_json});
+      INSERT OR REPLACE INTO "{snap}"(table_name, key, value)
+      VALUES('{escaped_name}', {snap_key}, {table_json});
     END;
     """
         ).strip()
@@ -247,11 +247,11 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
       UPDATE "{chron}"
       SET __updated_ms = {ts}, __version = {nextv}
       WHERE {match_new} AND __deleted = 0
-        AND EXISTS(SELECT 1 FROM "{snap}" WHERE key = {snap_key})
+        AND EXISTS(SELECT 1 FROM "{snap}" WHERE table_name = '{escaped_name}' AND key = {snap_key})
         AND {new_json} IS NOT {snap_json};
 
       -- Clean up snapshot
-      DELETE FROM "{snap}" WHERE key = {snap_key};
+      DELETE FROM "{snap}" WHERE table_name = '{escaped_name}' AND key = {snap_key};
 
       -- Fresh insert: create chronicle entry (NO INSERT OR IGNORE!)
       INSERT INTO "{chron}"({pk_list}, __added_ms, __updated_ms, __version, __deleted)
@@ -290,7 +290,7 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     CREATE TRIGGER "chronicle_{table_name}_ad"
     AFTER DELETE ON "{table_name}"
     FOR EACH ROW
-    WHEN NOT EXISTS(SELECT 1 FROM "{snap}" WHERE key = {snap_key_old})
+    WHEN NOT EXISTS(SELECT 1 FROM "{snap}" WHERE table_name = '{escaped_name}' AND key = {snap_key_old})
     BEGIN
       UPDATE "{chron}"
         SET __updated_ms = {ts},
@@ -335,7 +335,17 @@ def disable_chronicle(conn: sqlite3.Connection, table_name: str) -> bool:
         conn.execute(f'DROP INDEX IF EXISTS "{chronicle_table}__version_idx"')
         conn.execute(f'DROP INDEX IF EXISTS "{chronicle_table}_version"')
 
-        # Drop the snapshot table
+        # Clean up rows from shared snapshots table
+        cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='_chroniclesnapshots'"
+        )
+        if cursor.fetchone():
+            conn.execute(
+                'DELETE FROM "_chroniclesnapshots" WHERE table_name = ?',
+                (table_name,),
+            )
+
+        # Drop legacy per-table snapshot table if it exists
         conn.execute(f'DROP TABLE IF EXISTS "_chronicle_snapshot_{table_name}"')
 
         # Drop the chronicle table
@@ -367,7 +377,7 @@ def list_chronicled_tables(conn: sqlite3.Connection) -> List[str]:
     """
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '_chronicle_%' AND name NOT LIKE '_chronicle_snapshot_%'"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '_chronicle_%' AND name != '_chroniclesnapshots'"
     )
     return [row[0][11:] for row in cursor.fetchall()]  # Strip '_chronicle_' prefix
 
@@ -397,8 +407,6 @@ def upgrade_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     if "added_ms" not in cols:
         return  # already migrated
 
-    snap = f"_chronicle_snapshot_{table_name}"
-
     # Build an ALTER + DROP + CREATE script
     script = f"""
     DROP INDEX IF EXISTS "{chron}_version";
@@ -417,7 +425,9 @@ def upgrade_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     ALTER TABLE "{chron}" RENAME COLUMN version TO __version;
     ALTER TABLE "{chron}" RENAME COLUMN deleted TO __deleted;
 
-    CREATE TABLE IF NOT EXISTS "{snap}" (key TEXT PRIMARY KEY, value TEXT);
+    DROP TABLE IF EXISTS "_chronicle_snapshot_{table_name}";
+    CREATE TABLE IF NOT EXISTS "_chroniclesnapshots"
+        (table_name TEXT, key TEXT, value TEXT, PRIMARY KEY(table_name, key));
 
     CREATE INDEX IF NOT EXISTS "{chron}__version_idx"
         ON "{chron}"(__version);
