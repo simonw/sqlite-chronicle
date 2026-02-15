@@ -11,6 +11,9 @@ classifiers = [
 ]
 requires-python = ">=3.10"
 
+[project.scripts]
+sqlite-chronicle = "sqlite_chronicle:cli_main_entry"
+
 [project.urls]
 Homepage = "https://github.com/simonw/sqlite-chronicle"
 Changelog = "https://github.com/simonw/sqlite-chronicle/releases"

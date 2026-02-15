@@ -1,7 +1,10 @@
 import dataclasses
 import sqlite3
 import textwrap
+from importlib.metadata import version as _get_version
 from typing import Any, Generator, Optional, List, Tuple, Dict
+
+__version__ = _get_version("sqlite-chronicle")
 
 
 class ChronicleError(Exception):
@@ -526,8 +529,13 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
     import sys
 
     parser = argparse.ArgumentParser(
-        prog="python -m sqlite_chronicle",
+        prog="sqlite-chronicle",
         description="Enable or disable chronicle tracking on tables in an SQLite DB.",
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument("db_path", help="Path to the SQLite database file")
     parser.add_argument(
@@ -571,7 +579,11 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
     return 1 if any_error else 0
 
 
-if __name__ == "__main__":
+def cli_main_entry():
     import sys
 
     sys.exit(cli_main())
+
+
+if __name__ == "__main__":
+    cli_main_entry()
