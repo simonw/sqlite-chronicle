@@ -7,6 +7,10 @@
 
 Use triggers to track when rows in a SQLite table were updated or deleted
 
+## Core idea
+
+Create a `_chronicle_{table_name}` table to accompany a regular table. Each row in the regular table has a corresponding row in the chronicle table that records timestamps for when it was added or last updated plus an incrementing version number, all maintained using SQLite triggers. This lets you efficiently identify which rows have been added, updated or deleted since a previous timestamp or version.
+
 ## Installation
 
 ```bash
