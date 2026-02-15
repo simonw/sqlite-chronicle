@@ -153,3 +153,20 @@ def test_updates_since_more_rows_than_batch_size_in_an_update():
     assert len(changes) == 201
     # Each change should have a different version
     assert len(set(c.version for c in changes)) == 201
+
+
+@pytest.mark.parametrize("table_name", ("dogs and stuff", "weird.table.name"))
+def test_updates_since_special_table_names(table_name):
+    """Test that updates_since works with table names containing special characters."""
+    db = Database(memory=True)
+    db[table_name].insert_all(
+        [{"id": 1, "name": "Cleo"}, {"id": 2, "name": "Pancakes"}],
+        pk="id",
+    )
+    enable_chronicle(db.conn, table_name)
+
+    # Should not raise an error and should return correct results
+    changes = list(updates_since(db.conn, table_name))
+    assert len(changes) == 2
+    assert changes[0].pks == (1,)
+    assert changes[1].pks == (2,)

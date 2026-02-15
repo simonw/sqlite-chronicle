@@ -21,9 +21,15 @@ You can enable chronicle for specific tables in a SQLite database using the comm
 python -m sqlite_chronicle database.db table_1 table_2
 ```
 
+To disable chronicle tracking, use the `--disable` flag:
+
+```bash
+python -m sqlite_chronicle database.db table_1 --disable
+```
+
 ## Python API
 
-This package exposes two Python functions for configuring and using chronicle tables:
+This package exposes several Python functions for configuring and using chronicle tables:
 
 ### enable_chronicle(conn, table_name)
 
@@ -53,7 +59,55 @@ The end result is a chronicle table that looks something like this:
 |   2 | 1694408825192 | 1694408825192 | 5 |      0 |
 |   3 | 1694408825192 | 1694408825192 | 6 |      0 |
 
-## upgrade_chronicle(conn, table_name)
+### disable_chronicle(conn, table_name)
+
+Use `sqlite_chronicle.disable_chronicle(conn, table_name)` to remove chronicle tracking from a table. This will:
+
+1. Drop the `_chronicle_{table_name}` table
+2. Remove all associated triggers
+3. Remove the version index
+
+Returns `True` if chronicle was disabled, `False` if no chronicle table existed for that table.
+
+```python
+import sqlite_chronicle
+
+# Disable chronicle on the dogs table
+result = sqlite_chronicle.disable_chronicle(conn, "dogs")
+if result:
+    print("Chronicle disabled")
+else:
+    print("No chronicle found")
+```
+
+### is_chronicle_enabled(conn, table_name)
+
+Use `sqlite_chronicle.is_chronicle_enabled(conn, table_name)` to check if chronicle tracking is enabled for a table.
+
+Returns `True` if a chronicle table exists for the given table, `False` otherwise.
+
+```python
+import sqlite_chronicle
+
+if sqlite_chronicle.is_chronicle_enabled(conn, "dogs"):
+    print("Chronicle is enabled for dogs")
+else:
+    print("Chronicle is not enabled for dogs")
+```
+
+### list_chronicled_tables(conn)
+
+Use `sqlite_chronicle.list_chronicled_tables(conn)` to get a list of all tables that have chronicle tracking enabled.
+
+```python
+import sqlite_chronicle
+
+tables = sqlite_chronicle.list_chronicled_tables(conn)
+print(f"Chronicle is enabled for: {tables}")
+# Output: Chronicle is enabled for: ['dogs', 'cats']
+```
+
+### upgrade_chronicle(conn, table_name)
 
 This function detects if the specified table has previously had an older version of the chronicle table and triggers created for it, and if so it will upgrade that table to the latest implementation, preserving existing timestamp and version data.
 

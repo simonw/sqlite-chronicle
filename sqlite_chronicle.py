@@ -1,7 +1,7 @@
 import dataclasses
 import sqlite3
 import textwrap
-from typing import Generator, Optional, List
+from typing import Any, Generator, Optional, List, Tuple, Dict
 
 
 class ChronicleError(Exception):
@@ -10,11 +10,11 @@ class ChronicleError(Exception):
 
 @dataclasses.dataclass
 class Change:
-    pks: tuple
+    pks: Tuple[Any, ...]
     added_ms: int
     updated_ms: int
     version: int
-    row: dict
+    row: Dict[str, Any]
     deleted: bool
 
 
@@ -203,9 +203,7 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
             + f') FROM "{table_name}" WHERE {match_new})'
         )
         snap_json = f'(SELECT value FROM "{snap}" WHERE key = {snap_key})'
-        update_when = " OR ".join(
-            f'OLD."{c}" IS NOT NEW."{c}"' for c in nonpks
-        )
+        update_when = " OR ".join(f'OLD."{c}" IS NOT NEW."{c}"' for c in nonpks)
     else:
         new_json = "'[]'"
         table_json = "'[]'"
@@ -306,6 +304,74 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     return stmts
 
 
+def disable_chronicle(conn: sqlite3.Connection, table_name: str) -> bool:
+    """
+    Remove chronicle tracking from a table.
+
+    - Drops the _chronicle_{table_name} table if it exists
+    - Removes all associated triggers (both old and new naming conventions)
+    - Removes the version index
+
+    Returns True if chronicle was disabled, False if no chronicle table existed.
+    """
+    chronicle_table = f"_chronicle_{table_name}"
+    cursor = conn.cursor()
+
+    # Check if chronicle table exists
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+        (chronicle_table,),
+    )
+    if not cursor.fetchone():
+        return False
+
+    with conn:
+        # Drop triggers (handle both old and new naming conventions)
+        for prefix in ("chronicle_", "_chronicle_"):
+            for suffix in ("_bi", "_ai", "_au", "_ad"):
+                conn.execute(f'DROP TRIGGER IF EXISTS "{prefix}{table_name}{suffix}"')
+
+        # Drop indexes (both old and new naming)
+        conn.execute(f'DROP INDEX IF EXISTS "{chronicle_table}__version_idx"')
+        conn.execute(f'DROP INDEX IF EXISTS "{chronicle_table}_version"')
+
+        # Drop the snapshot table
+        conn.execute(f'DROP TABLE IF EXISTS "_chronicle_snapshot_{table_name}"')
+
+        # Drop the chronicle table
+        conn.execute(f'DROP TABLE "{chronicle_table}"')
+
+    return True
+
+
+def is_chronicle_enabled(conn: sqlite3.Connection, table_name: str) -> bool:
+    """
+    Check if chronicle tracking is enabled for a table.
+
+    Returns True if a chronicle table exists for the given table, False otherwise.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
+        (f"_chronicle_{table_name}",),
+    )
+    return cursor.fetchone() is not None
+
+
+def list_chronicled_tables(conn: sqlite3.Connection) -> List[str]:
+    """
+    Return a list of all tables that have chronicle tracking enabled.
+
+    Scans the database for tables matching the _chronicle_{table_name} pattern
+    and returns the original table names.
+    """
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '_chronicle_%' AND name NOT LIKE '_chronicle_snapshot_%'"
+    )
+    return [row[0][11:] for row in cursor.fetchall()]  # Strip '_chronicle_' prefix
+
+
 def upgrade_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     """
     Migrate a *legacy* chronicle table:
@@ -370,11 +436,20 @@ def updates_since(
     batch_size: int = 1000,
 ) -> Generator[Change, None, None]:
     """
-    Yields Change(pks, added_ms, updated_ms, version, row, deleted)
-    for every chronicle.version > since, in ascending order.
+    Yield Change objects for all rows modified since a given version.
+
+    Args:
+        conn: SQLite database connection
+        table_name: Name of the table to get changes for
+        since: Version number to start from (exclusive). If None, returns all changes.
+        batch_size: Number of rows to fetch per database query (for pagination)
+
+    Yields:
+        Change objects with pks, added_ms, updated_ms, version, row, and deleted fields.
+        Results are ordered by version ascending.
     """
     cur = conn.cursor()
-    cur.row_factory = sqlite3.Row
+    cur.row_factory = sqlite3.Row  # type: ignore[assignment]
     if since is None:
         since = 0
 
@@ -396,7 +471,7 @@ def updates_since(
     sql = textwrap.dedent(
         f"""
         SELECT {select}
-          FROM {chron} AS c
+          FROM "{chron}" AS c
           LEFT JOIN "{table_name}" AS t
             ON {join}
          WHERE c.__version > ?
@@ -427,19 +502,33 @@ def updates_since(
             )
 
 
-def cli_main(argv=None) -> int:
+def cli_main(argv: Optional[List[str]] = None) -> int:
+    """
+    Command-line interface for enabling/disabling chronicle tracking.
+
+    Args:
+        argv: Command-line arguments (defaults to sys.argv if None)
+
+    Returns:
+        Exit code: 0 on success, 1 if any errors occurred
+    """
     import argparse
     import sys
 
     parser = argparse.ArgumentParser(
         prog="python -m sqlite_chronicle",
-        description="Enable chronicle tracking on one or more tables in an SQLite DB.",
+        description="Enable or disable chronicle tracking on tables in an SQLite DB.",
     )
     parser.add_argument("db_path", help="Path to the SQLite database file")
     parser.add_argument(
         "tables",
         nargs="+",
-        help="One or more table names to enable chronicle tracking on",
+        help="One or more table names to enable/disable chronicle tracking on",
+    )
+    parser.add_argument(
+        "--disable",
+        action="store_true",
+        help="Disable chronicle tracking instead of enabling it",
     )
 
     args = parser.parse_args(argv)
@@ -453,8 +542,14 @@ def cli_main(argv=None) -> int:
     any_error = False
     for tbl in args.tables:
         try:
-            enable_chronicle(conn, tbl)
-            print(f"- chronicle enabled on table {tbl!r}")
+            if args.disable:
+                if disable_chronicle(conn, tbl):
+                    print(f"- chronicle disabled on table {tbl!r}")
+                else:
+                    print(f"- no chronicle found for table {tbl!r}")
+            else:
+                enable_chronicle(conn, tbl)
+                print(f"- chronicle enabled on table {tbl!r}")
         except ChronicleError as ce:
             print(f"ERROR: {ce}", file=sys.stderr)
             any_error = True

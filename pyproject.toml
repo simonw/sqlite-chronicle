@@ -18,7 +18,7 @@ Issues = "https://github.com/simonw/sqlite-chronicle/issues"
 CI = "https://github.com/simonw/sqlite-chronicle/actions"
 
 [dependency-groups]
-dev = ["pytest", "sqlite-utils>=4.0a0", "cogapp"]
+dev = ["pytest", "sqlite-utils>=4.0a0", "cogapp", "mypy"]
 
 [build-system]
 requires = ["setuptools"]
