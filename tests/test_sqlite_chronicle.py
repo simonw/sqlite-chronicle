@@ -254,6 +254,41 @@ def test_insert_or_replace_after_delete():
     assert rows == [{"id": 1, "version": 3, "deleted": 0}]
 
 
+def test_undelete_resets_added_ms():
+    """Re-inserting after a delete should reset __added_ms to the time of re-insertion."""
+    db = sqlite_utils.Database(memory=True)
+    dogs = db.table("dogs", pk="id").create(
+        {"id": int, "name": str, "color": str}, pk="id"
+    )
+    enable_chronicle(db.conn, "dogs")
+    dogs.insert({"id": 1, "name": "Cleo", "color": "black"})
+
+    original_added_ms = db.execute(
+        "select __added_ms from _chronicle_dogs where id = 1"
+    ).fetchone()[0]
+
+    db.execute("DELETE FROM dogs WHERE id = 1")
+    time.sleep(0.01)
+
+    # Re-insert via INSERT OR REPLACE
+    db.execute(
+        "INSERT OR REPLACE INTO dogs (id, name, color) VALUES (1, 'Cleo', 'brown')"
+    )
+
+    row = db.execute(
+        "select __added_ms, __updated_ms, __deleted from _chronicle_dogs where id = 1"
+    ).fetchone()
+    new_added_ms, new_updated_ms, deleted = row
+
+    assert deleted == 0
+    assert new_added_ms > original_added_ms, (
+        "__added_ms should be reset to the time of re-insertion, not preserved"
+    )
+    assert new_added_ms == new_updated_ms, (
+        "__added_ms and __updated_ms should match on re-insertion"
+    )
+
+
 def test_insert_or_replace_blob_column():
     """INSERT OR REPLACE should work correctly with BLOB columns."""
     db = sqlite_utils.Database(memory=True)

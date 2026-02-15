@@ -229,7 +229,7 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     BEGIN
       -- Un-delete if re-inserting a previously deleted row
       UPDATE "{chron}"
-      SET __updated_ms = {ts}, __version = {nextv}, __deleted = 0
+      SET __added_ms = {ts}, __updated_ms = {ts}, __version = {nextv}, __deleted = 0
       WHERE {match_new} AND __deleted = 1;
 
       -- Replace with actual change: bump version

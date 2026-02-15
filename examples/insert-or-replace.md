@@ -243,11 +243,11 @@ Snapshot rows remaining: 0
 
 ## 6. Re-insert after DELETE via INSERT OR REPLACE
 
-When a row is deleted and then re-inserted (with either INSERT or INSERT OR REPLACE), the chronicle row should flip from `__deleted = 1` back to `__deleted = 0` and bump the version. The AFTER INSERT trigger handles this with its un-delete UPDATE path.
+When a row is deleted and then re-inserted (with either INSERT or INSERT OR REPLACE), the chronicle row should flip from `__deleted = 1` back to `__deleted = 0`, bump the version, and reset `__added_ms` to the time of re-insertion. This treats an "undelete" as a fresh addition rather than a continuation of the original row's history.
 
 ```python3
 
-import sqlite3
+import sqlite3, time
 from sqlite_chronicle import enable_chronicle
 
 conn = sqlite3.connect(":memory:")
@@ -258,17 +258,24 @@ enable_chronicle(conn, "dogs")
 
 def show():
     r = conn.execute(
-        "SELECT __version, __deleted FROM _chronicle_dogs WHERE id=1"
+        "SELECT __version, __deleted, __added_ms, __updated_ms FROM _chronicle_dogs WHERE id=1"
     ).fetchone()
-    return f"version={r[0]}  deleted={r[1]}"
+    return r
 
-print(f"After insert:                  {show()}")
+r = show()
+print(f"After insert:                  version={r[0]}  deleted={r[1]}")
+original_added_ms = r[2]
 
 conn.execute("DELETE FROM dogs WHERE id=1")
-print(f"After delete:                  {show()}")
+r = show()
+print(f"After delete:                  version={r[0]}  deleted={r[1]}")
 
+time.sleep(0.01)
 conn.execute("INSERT OR REPLACE INTO dogs VALUES(1, 'Cleo', 'brown')")
-print(f"After re-insert via REPLACE:   {show()}")
+r = show()
+print(f"After re-insert via REPLACE:   version={r[0]}  deleted={r[1]}")
+print(f"added_ms was reset:            {r[2] > original_added_ms}")
+print(f"added_ms matches updated_ms:   {r[2] == r[3]}")
 
 # Verify the row is really back in the main table
 actual = conn.execute("SELECT name, color FROM dogs WHERE id=1").fetchone()
@@ -280,6 +287,8 @@ print(f"Main table row:                name={actual[0]!r}, color={actual[1]!r}")
 After insert:                  version=1  deleted=0
 After delete:                  version=2  deleted=1
 After re-insert via REPLACE:   version=3  deleted=0
+added_ms was reset:            True
+added_ms matches updated_ms:   True
 Main table row:                name='Cleo', color='brown'
 ```
 
@@ -567,44 +576,71 @@ After Re-insert                           -> snapshot rows: 0
 
 ## 13. Full test suite
 
-All 24 tests pass, including the INSERT OR REPLACE tests for blob columns, NULL values, and mixed types:
+All tests pass, including the INSERT OR REPLACE tests for blob columns, NULL values, mixed types, and undelete timestamp reset:
 
 ```bash
-/usr/local/bin/python -m pytest tests/ -v 2>&1 | sed "s/in [0-9.]*s/in Xs/"
+uv run pytest tests/ -v 2>&1 | sed "s/in [0-9.]*s/in Xs/"
 ```
 
 ```output
 ============================= test session starts ==============================
-platform linux -- Python 3.11.14, pytest-9.0.2, pluggy-1.6.0 -- /usr/local/bin/python
+platform linux -- Python 3.11.14, pytest-9.0.2, pluggy-1.6.0 -- /home/user/sqlite-chronicle/.venv/bin/python
 cachedir: .pytest_cache
 rootdir: /home/user/sqlite-chronicle
 configfile: pyproject.toml
-collecting ... collected 24 items
+collecting ... collected 51 items
 
-tests/test_cli.py::test_cli_main_success PASSED                          [  4%]
-tests/test_cli.py::test_cli_main_error_invalid_db PASSED                 [  8%]
-tests/test_cli.py::test_cli_main_bad_table PASSED                        [ 12%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-dogs] PASSED  [ 16%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-dogs and stuff] PASSED [ 20%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-weird.table.name] PASSED [ 25%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-dogs] PASSED  [ 29%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-dogs and stuff] PASSED [ 33%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-weird.table.name] PASSED [ 37%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle_alternative_primary_keys[pks0] PASSED [ 41%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle_alternative_primary_keys[pks1] PASSED [ 45%]
-tests/test_sqlite_chronicle.py::test_upsert PASSED                       [ 50%]
-tests/test_sqlite_chronicle.py::test_insert_or_replace PASSED            [ 54%]
-tests/test_sqlite_chronicle.py::test_insert_or_replace_compound_pk PASSED [ 58%]
-tests/test_sqlite_chronicle.py::test_insert_or_replace_after_delete PASSED [ 62%]
-tests/test_sqlite_chronicle.py::test_insert_or_replace_blob_column PASSED [ 66%]
-tests/test_sqlite_chronicle.py::test_insert_or_replace_null_values PASSED [ 70%]
-tests/test_sqlite_chronicle.py::test_insert_or_replace_mixed_types PASSED [ 75%]
-tests/test_updates_since.py::test_updates_since PASSED                   [ 79%]
-tests/test_updates_since.py::test_updates_since_more_rows_than_batch_size_when_enabled PASSED [ 83%]
-tests/test_updates_since.py::test_updates_since_more_rows_than_batch_size_in_an_update PASSED [ 87%]
-tests/test_upgrade.py::test_upgrade_drops_old_and_installs_new PASSED    [ 91%]
-tests/test_upgrade.py::test_idempotent_and_noop_on_nonexistent PASSED    [ 95%]
+tests/test_cli.py::test_cli_version PASSED                               [  1%]
+tests/test_cli.py::test_cli_main_success PASSED                          [  3%]
+tests/test_cli.py::test_cli_main_error_invalid_db PASSED                 [  5%]
+tests/test_cli.py::test_cli_main_bad_table PASSED                        [  7%]
+tests/test_cli.py::test_cli_disable_success PASSED                       [  9%]
+tests/test_cli.py::test_cli_disable_no_chronicle PASSED                  [ 11%]
+tests/test_cli.py::test_cli_disable_multiple_tables PASSED               [ 13%]
+tests/test_disable_chronicle.py::test_disable_chronicle_removes_table_and_triggers PASSED [ 15%]
+tests/test_disable_chronicle.py::test_disable_chronicle_returns_false_if_not_enabled PASSED [ 17%]
+tests/test_disable_chronicle.py::test_disable_chronicle_idempotent PASSED [ 19%]
+tests/test_disable_chronicle.py::test_disable_chronicle_original_table_still_works PASSED [ 21%]
+tests/test_disable_chronicle.py::test_disable_chronicle_can_reenable PASSED [ 23%]
+tests/test_disable_chronicle.py::test_disable_chronicle_special_table_names[dogs] PASSED [ 25%]
+tests/test_disable_chronicle.py::test_disable_chronicle_special_table_names[dogs and stuff] PASSED [ 27%]
+tests/test_disable_chronicle.py::test_disable_chronicle_special_table_names[weird.table.name] PASSED [ 29%]
+tests/test_helpers.py::test_is_chronicle_enabled_true PASSED             [ 31%]
+tests/test_helpers.py::test_is_chronicle_enabled_false PASSED            [ 33%]
+tests/test_helpers.py::test_is_chronicle_enabled_after_disable PASSED    [ 35%]
+tests/test_helpers.py::test_is_chronicle_enabled_nonexistent_table PASSED [ 37%]
+tests/test_helpers.py::test_list_chronicled_tables_empty PASSED          [ 39%]
+tests/test_helpers.py::test_list_chronicled_tables_single PASSED         [ 41%]
+tests/test_helpers.py::test_list_chronicled_tables_multiple PASSED       [ 43%]
+tests/test_helpers.py::test_list_chronicled_tables_after_disable PASSED  [ 45%]
+tests/test_helpers.py::test_list_chronicled_tables_special_names PASSED  [ 47%]
+tests/test_snapshot_table_name_conflict.py::test_dogs_and_snapshot_dogs_conflict_dogs_first PASSED [ 49%]
+tests/test_snapshot_table_name_conflict.py::test_dogs_and_snapshot_dogs_conflict_snapshot_dogs_first PASSED [ 50%]
+tests/test_snapshot_table_name_conflict.py::test_table_named_snapshots PASSED [ 52%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-dogs] PASSED  [ 54%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-dogs and stuff] PASSED [ 56%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-weird.table.name] PASSED [ 58%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-dogs] PASSED  [ 60%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-dogs and stuff] PASSED [ 62%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-weird.table.name] PASSED [ 64%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle_alternative_primary_keys[pks0] PASSED [ 66%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle_alternative_primary_keys[pks1] PASSED [ 68%]
+tests/test_sqlite_chronicle.py::test_upsert PASSED                       [ 70%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace PASSED            [ 72%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace_compound_pk PASSED [ 74%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace_after_delete PASSED [ 76%]
+tests/test_sqlite_chronicle.py::test_undelete_resets_added_ms PASSED     [ 78%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace_blob_column PASSED [ 80%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace_null_values PASSED [ 82%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace_mixed_types PASSED [ 84%]
+tests/test_updates_since.py::test_updates_since PASSED                   [ 86%]
+tests/test_updates_since.py::test_updates_since_more_rows_than_batch_size_when_enabled PASSED [ 88%]
+tests/test_updates_since.py::test_updates_since_more_rows_than_batch_size_in_an_update PASSED [ 90%]
+tests/test_updates_since.py::test_updates_since_special_table_names[dogs and stuff] PASSED [ 92%]
+tests/test_updates_since.py::test_updates_since_special_table_names[weird.table.name] PASSED [ 94%]
+tests/test_upgrade.py::test_upgrade_drops_old_and_installs_new PASSED    [ 96%]
+tests/test_upgrade.py::test_idempotent_and_noop_on_nonexistent PASSED    [ 98%]
 tests/test_upgrade.py::test_noop_if_already_new_schema PASSED            [100%]
 
-============================== 24 passed in Xs ==============================
+============================== 51 passed in Xs ==============================
 ```
