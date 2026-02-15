@@ -1,6 +1,6 @@
 [project]
 name = "sqlite-chronicle"
-version = "0.4"
+version = "0.5"
 description = "Use triggers to maintain a chronicle table of updated/deleted timestamps in SQLite"
 readme = "README.md"
 authors = [{name = "Simon Willison"}]
@@ -9,6 +9,7 @@ classifiers = [
     "Topic :: Database",
     "Programming Language :: SQL"
 ]
+requires-python = ">=3.10"
 
 [project.urls]
 Homepage = "https://github.com/simonw/sqlite-chronicle"
@@ -16,8 +17,8 @@ Changelog = "https://github.com/simonw/sqlite-chronicle/releases"
 Issues = "https://github.com/simonw/sqlite-chronicle/issues"
 CI = "https://github.com/simonw/sqlite-chronicle/actions"
 
-[project.optional-dependencies]
-test = ["pytest", "sqlite-utils>=4.0a0", "cogapp", "mypy"]
+[dependency-groups]
+dev = ["pytest", "sqlite-utils>=4.0a0", "cogapp", "mypy"]
 
 [build-system]
 requires = ["setuptools"]

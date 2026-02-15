@@ -28,8 +28,9 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     - AFTER UPDATE trigger (WHEN any OLD<>NEW)
     - AFTER DELETE trigger
 
-    Requires client code to use UPSERT (INSERT…ON CONFLICT DO UPDATE) for upserts rather
-    than INSERT OR REPLACE, since INSERT OR REPLACE will be incorrectly tracked.
+    Correctly handles INSERT OR REPLACE by using a snapshot table and
+    INSERT...WHERE NOT EXISTS (instead of INSERT OR IGNORE) to avoid
+    SQLite's conflict resolution propagation.
     """
     cursor = conn.cursor()
 
@@ -135,6 +136,13 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
         f'   FROM "{table_name}";'
     )
 
+    # Snapshot table for INSERT OR REPLACE support
+    snapshot_table = f"_chronicle_snapshot_{table_name}"
+    sql_statements.append(
+        f'CREATE TABLE IF NOT EXISTS "{snapshot_table}" '
+        f"(key TEXT PRIMARY KEY, value TEXT)"
+    )
+
     sql_statements.extend(_chronicle_triggers(conn, table_name))
 
     # Execute all statements within a transaction
@@ -147,12 +155,14 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     """
     Return SQL statements to create chronicle triggers for the given table.
 
-    Creates three triggers:
-    - chronicle_{table}_ai: AFTER INSERT - records new rows with timestamp and version
-    - chronicle_{table}_au: AFTER UPDATE - updates timestamp/version when non-PK columns change
-    - chronicle_{table}_ad: AFTER DELETE - marks rows as deleted with updated timestamp/version
+    Uses a snapshot table + INSERT...WHERE NOT EXISTS (instead of INSERT OR
+    IGNORE) so that INSERT OR REPLACE is tracked correctly.  SQLite propagates
+    the outer statement's conflict-resolution strategy into trigger bodies, so
+    ``INSERT OR IGNORE`` silently becomes ``INSERT OR REPLACE`` when fired by
+    an ``INSERT OR REPLACE`` on the main table.
     """
     chron = f"_chronicle_{table_name}"
+    snap = f"_chronicle_snapshot_{table_name}"
     cur = conn.cursor()
 
     # get pk / non‐pk column lists from the primary table
@@ -174,16 +184,55 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     match_new = " AND ".join(f'"{c}"=NEW."{c}"' for c in pks)
     match_old = " AND ".join(f'"{c}"=OLD."{c}"' for c in pks)
 
-    # build an UPDATE‐only‐if‐really‐changed clause
-    if nonpks:
-        cond = " OR ".join(f'OLD."{c}" IS NOT NEW."{c}"' for c in nonpks)
-        when = f"WHEN {cond}"
+    # Snapshot key expression (single PK → cast, compound → json_array)
+    if len(pks) == 1:
+        snap_key = f'CAST(NEW."{pks[0]}" AS TEXT)'
+        snap_key_old = f'CAST(OLD."{pks[0]}" AS TEXT)'
     else:
-        when = ""
+        snap_key = "json_array(" + ", ".join(f'NEW."{c}"' for c in pks) + ")"
+        snap_key_old = "json_array(" + ", ".join(f'OLD."{c}"' for c in pks) + ")"
+
+    # JSON representation of non-PK columns for change detection.
+    # Wrap each value with quote() so BLOBs survive JSON serialization
+    # (json_array cannot hold raw BLOB values).
+    if nonpks:
+        new_json = "json_array(" + ", ".join(f'quote(NEW."{c}")' for c in nonpks) + ")"
+        table_json = (
+            "(SELECT json_array("
+            + ", ".join(f'quote("{c}")' for c in nonpks)
+            + f') FROM "{table_name}" WHERE {match_new})'
+        )
+        snap_json = f'(SELECT value FROM "{snap}" WHERE key = {snap_key})'
+        update_when = " OR ".join(
+            f'OLD."{c}" IS NOT NEW."{c}"' for c in nonpks
+        )
+    else:
+        new_json = "'[]'"
+        table_json = "'[]'"
+        snap_json = "'[]'"
+        update_when = "1"
 
     stmts: List[str] = []
 
-    # AFTER INSERT
+    # BEFORE INSERT — snapshot old row data before REPLACE's internal delete
+    stmts.append(
+        textwrap.dedent(
+            f"""
+    CREATE TRIGGER "chronicle_{table_name}_bi"
+    BEFORE INSERT ON "{table_name}"
+    FOR EACH ROW
+    WHEN EXISTS(SELECT 1 FROM "{table_name}" WHERE {match_new})
+    BEGIN
+      INSERT OR REPLACE INTO "{snap}"(key, value)
+      VALUES({snap_key}, {table_json});
+    END;
+    """
+        ).strip()
+    )
+
+    # AFTER INSERT — handles fresh inserts, replaces, and re-inserts
+    # CRITICAL: Uses INSERT...WHERE NOT EXISTS instead of INSERT OR IGNORE
+    # to avoid SQLite's conflict resolution propagation.
     stmts.append(
         textwrap.dedent(
             f"""
@@ -191,15 +240,25 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     AFTER INSERT ON "{table_name}"
     FOR EACH ROW
     BEGIN
-      INSERT OR IGNORE INTO "{chron}" (
-        {pk_list}, __added_ms, __updated_ms, __version, __deleted
-      ) VALUES (
-        {new_pk_list},
-        {ts},
-        {ts},
-        {nextv},
-        0
-      );
+      -- Un-delete if re-inserting a previously deleted row
+      UPDATE "{chron}"
+      SET __updated_ms = {ts}, __version = {nextv}, __deleted = 0
+      WHERE {match_new} AND __deleted = 1;
+
+      -- Replace with actual change: bump version
+      UPDATE "{chron}"
+      SET __updated_ms = {ts}, __version = {nextv}
+      WHERE {match_new} AND __deleted = 0
+        AND EXISTS(SELECT 1 FROM "{snap}" WHERE key = {snap_key})
+        AND {new_json} IS NOT {snap_json};
+
+      -- Clean up snapshot
+      DELETE FROM "{snap}" WHERE key = {snap_key};
+
+      -- Fresh insert: create chronicle entry (NO INSERT OR IGNORE!)
+      INSERT INTO "{chron}"({pk_list}, __added_ms, __updated_ms, __version, __deleted)
+      SELECT {new_pk_list}, {ts}, {ts}, {nextv}, 0
+      WHERE NOT EXISTS(SELECT 1 FROM "{chron}" WHERE {match_new});
     END;
     """
         ).strip()
@@ -212,7 +271,7 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     CREATE TRIGGER "chronicle_{table_name}_au"
     AFTER UPDATE ON "{table_name}"
     FOR EACH ROW
-    {when}
+    WHEN {update_when}
     BEGIN
       UPDATE "{chron}"
       SET __updated_ms = {ts},
@@ -223,13 +282,17 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
         ).strip()
     )
 
-    # AFTER DELETE
+    # AFTER DELETE — skip if snapshot exists (we are inside INSERT OR REPLACE,
+    # which is handled by the AFTER INSERT trigger instead).  When
+    # recursive_triggers is ON, the implicit DELETE within REPLACE fires
+    # this trigger; the snapshot check prevents a spurious __deleted=1 bump.
     stmts.append(
         textwrap.dedent(
             f"""
     CREATE TRIGGER "chronicle_{table_name}_ad"
     AFTER DELETE ON "{table_name}"
     FOR EACH ROW
+    WHEN NOT EXISTS(SELECT 1 FROM "{snap}" WHERE key = {snap_key_old})
     BEGIN
       UPDATE "{chron}"
         SET __updated_ms = {ts},
@@ -267,12 +330,15 @@ def disable_chronicle(conn: sqlite3.Connection, table_name: str) -> bool:
     with conn:
         # Drop triggers (handle both old and new naming conventions)
         for prefix in ("chronicle_", "_chronicle_"):
-            for suffix in ("_ai", "_au", "_ad"):
+            for suffix in ("_bi", "_ai", "_au", "_ad"):
                 conn.execute(f'DROP TRIGGER IF EXISTS "{prefix}{table_name}{suffix}"')
 
         # Drop indexes (both old and new naming)
         conn.execute(f'DROP INDEX IF EXISTS "{chronicle_table}__version_idx"')
         conn.execute(f'DROP INDEX IF EXISTS "{chronicle_table}_version"')
+
+        # Drop the snapshot table
+        conn.execute(f'DROP TABLE IF EXISTS "_chronicle_snapshot_{table_name}"')
 
         # Drop the chronicle table
         conn.execute(f'DROP TABLE "{chronicle_table}"')
@@ -303,7 +369,7 @@ def list_chronicled_tables(conn: sqlite3.Connection) -> List[str]:
     """
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '_chronicle_%'"
+        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '_chronicle_%' AND name NOT LIKE '_chronicle_snapshot_%'"
     )
     return [row[0][11:] for row in cursor.fetchall()]  # Strip '_chronicle_' prefix
 
@@ -333,6 +399,8 @@ def upgrade_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     if "added_ms" not in cols:
         return  # already migrated
 
+    snap = f"_chronicle_snapshot_{table_name}"
+
     # Build an ALTER + DROP + CREATE script
     script = f"""
     DROP INDEX IF EXISTS "{chron}_version";
@@ -341,10 +409,17 @@ def upgrade_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     DROP TRIGGER IF EXISTS "_chronicle_{table_name}_au";
     DROP TRIGGER IF EXISTS "_chronicle_{table_name}_ad";
 
+    DROP TRIGGER IF EXISTS "chronicle_{table_name}_bi";
+    DROP TRIGGER IF EXISTS "chronicle_{table_name}_ai";
+    DROP TRIGGER IF EXISTS "chronicle_{table_name}_au";
+    DROP TRIGGER IF EXISTS "chronicle_{table_name}_ad";
+
     ALTER TABLE "{chron}" RENAME COLUMN added_ms TO __added_ms;
     ALTER TABLE "{chron}" RENAME COLUMN updated_ms TO __updated_ms;
     ALTER TABLE "{chron}" RENAME COLUMN version TO __version;
     ALTER TABLE "{chron}" RENAME COLUMN deleted TO __deleted;
+
+    CREATE TABLE IF NOT EXISTS "{snap}" (key TEXT PRIMARY KEY, value TEXT);
 
     CREATE INDEX IF NOT EXISTS "{chron}__version_idx"
         ON "{chron}"(__version);
