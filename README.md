@@ -107,7 +107,7 @@ print(f"Chronicle is enabled for: {tables}")
 # Output: Chronicle is enabled for: ['dogs', 'cats']
 ```
 
-## upgrade_chronicle(conn, table_name)
+### upgrade_chronicle(conn, table_name)
 
 This function detects if the specified table has previously had an older version of the chronicle table and triggers created for it, and if so it will upgrade that table to the latest implementation, preserving existing timestamp and version data.
 
