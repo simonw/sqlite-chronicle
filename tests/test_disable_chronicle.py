@@ -16,6 +16,7 @@ def test_disable_chronicle_removes_table_and_triggers():
             "SELECT name FROM sqlite_master WHERE type='trigger'"
         ).fetchall()
     ]
+    assert "chronicle_dogs_bi" in triggers
     assert "chronicle_dogs_ai" in triggers
     assert "chronicle_dogs_au" in triggers
     assert "chronicle_dogs_ad" in triggers
@@ -34,6 +35,7 @@ def test_disable_chronicle_removes_table_and_triggers():
             "SELECT name FROM sqlite_master WHERE type='trigger'"
         ).fetchall()
     ]
+    assert "chronicle_dogs_bi" not in triggers
     assert "chronicle_dogs_ai" not in triggers
     assert "chronicle_dogs_au" not in triggers
     assert "chronicle_dogs_ad" not in triggers
