@@ -9,6 +9,7 @@ classifiers = [
     "Topic :: Database",
     "Programming Language :: SQL"
 ]
+requires-python = ">=3.10"
 
 [project.urls]
 Homepage = "https://github.com/simonw/sqlite-chronicle"
@@ -16,8 +17,8 @@ Changelog = "https://github.com/simonw/sqlite-chronicle/releases"
 Issues = "https://github.com/simonw/sqlite-chronicle/issues"
 CI = "https://github.com/simonw/sqlite-chronicle/actions"
 
-[project.optional-dependencies]
-test = ["pytest", "sqlite-utils>=4.0a0", "cogapp"]
+[dependency-groups]
+dev = ["pytest", "sqlite-utils>=4.0a0", "cogapp"]
 
 [build-system]
 requires = ["setuptools"]
