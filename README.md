@@ -160,6 +160,7 @@ Note that if a row had multiple updates in between calls to this function you wi
 ## Implementation notes
 
 - Both `INSERT OR REPLACE` and `INSERT ... ON CONFLICT DO UPDATE` (UPSERT) are fully supported. If an `INSERT OR REPLACE` writes identical data to an existing row, no version bump occurs.
+- If a row is deleted and then re-inserted with the same primary key, `__added_ms` is reset to the time of re-insertion (and `__deleted` flips back to `0`). This treats an "undelete" as a fresh addition rather than a continuation of the original row's history.
 - Updates to columns that are part of a primary key for the record is not currently supported.
 
 ## Potential applications
@@ -221,7 +222,7 @@ FOR EACH ROW
 BEGIN
   -- Un-delete if re-inserting a previously deleted row
   UPDATE "_chronicle_dogs"
-  SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER), __version = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1, __deleted = 0
+  SET __added_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER), __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER), __version = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1, __deleted = 0
   WHERE "id"=NEW."id" AND __deleted = 1;
 
   -- Replace with actual change: bump version
