@@ -140,14 +140,14 @@ CREATE TABLE "_chronicle_dogs" (
 CREATE INDEX "_chronicle_dogs__version_idx"
   ON "_chronicle_dogs"(__version);
 
-CREATE TABLE "_chronicle_dogs_snapshot" (key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE "_chronicle_snapshot_dogs" (key TEXT PRIMARY KEY, value TEXT);
 
 CREATE TRIGGER "chronicle_dogs_bi"
 BEFORE INSERT ON "dogs"
 FOR EACH ROW
 WHEN EXISTS(SELECT 1 FROM "dogs" WHERE "id"=NEW."id")
 BEGIN
-  INSERT OR REPLACE INTO "_chronicle_dogs_snapshot"(key, value)
+  INSERT OR REPLACE INTO "_chronicle_snapshot_dogs"(key, value)
   VALUES(CAST(NEW."id" AS TEXT), (SELECT json_array("name", "age") FROM "dogs" WHERE "id"=NEW."id"));
 END;
 
@@ -164,11 +164,11 @@ BEGIN
   UPDATE "_chronicle_dogs"
   SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER), __version = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1
   WHERE "id"=NEW."id" AND __deleted = 0
-    AND EXISTS(SELECT 1 FROM "_chronicle_dogs_snapshot" WHERE key = CAST(NEW."id" AS TEXT))
-    AND json_array(NEW."name", NEW."age") IS NOT (SELECT value FROM "_chronicle_dogs_snapshot" WHERE key = CAST(NEW."id" AS TEXT));
+    AND EXISTS(SELECT 1 FROM "_chronicle_snapshot_dogs" WHERE key = CAST(NEW."id" AS TEXT))
+    AND json_array(NEW."name", NEW."age") IS NOT (SELECT value FROM "_chronicle_snapshot_dogs" WHERE key = CAST(NEW."id" AS TEXT));
 
   -- Clean up snapshot
-  DELETE FROM "_chronicle_dogs_snapshot" WHERE key = CAST(NEW."id" AS TEXT);
+  DELETE FROM "_chronicle_snapshot_dogs" WHERE key = CAST(NEW."id" AS TEXT);
 
   -- Fresh insert: create chronicle entry (NO INSERT OR IGNORE!)
   INSERT INTO "_chronicle_dogs"("id", __added_ms, __updated_ms, __version, __deleted)
@@ -190,7 +190,7 @@ END;
 CREATE TRIGGER "chronicle_dogs_ad"
 AFTER DELETE ON "dogs"
 FOR EACH ROW
-WHEN NOT EXISTS(SELECT 1 FROM "_chronicle_dogs_snapshot" WHERE key = CAST(OLD."id" AS TEXT))
+WHEN NOT EXISTS(SELECT 1 FROM "_chronicle_snapshot_dogs" WHERE key = CAST(OLD."id" AS TEXT))
 BEGIN
   UPDATE "_chronicle_dogs"
     SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),

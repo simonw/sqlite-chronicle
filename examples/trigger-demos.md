@@ -230,7 +230,7 @@ for r in conn.execute("SELECT id, __version, __deleted FROM _chronicle_dogs ORDE
     print(f"id={r[0]}  version={r[1]}  deleted={r[2]}")
 
 # Confirm no snapshot residue
-snaps = conn.execute("SELECT count(*) FROM _chronicle_dogs_snapshot").fetchone()[0]
+snaps = conn.execute("SELECT count(*) FROM _chronicle_snapshot_dogs").fetchone()[0]
 print(f"Snapshot rows remaining: {snaps}")
 
 ```
@@ -523,7 +523,7 @@ Changes since version 2:
 
 ## 12. Snapshot table is always clean
 
-The `_chronicle_<table>_snapshot` table is a transient helper. It is populated by the BEFORE INSERT trigger and cleaned up within the same AFTER INSERT trigger. After any operation the snapshot table should always be empty.
+The `_chronicle_snapshot_<table>` table is a transient helper. It is populated by the BEFORE INSERT trigger and cleaned up within the same AFTER INSERT trigger. After any operation the snapshot table should always be empty.
 
 ```python3
 
@@ -537,7 +537,7 @@ conn.execute("INSERT INTO dogs VALUES(1, 'Cleo', 'black')")
 enable_chronicle(conn, "dogs")
 
 def snap_count():
-    return conn.execute("SELECT count(*) FROM _chronicle_dogs_snapshot").fetchone()[0]
+    return conn.execute("SELECT count(*) FROM _chronicle_snapshot_dogs").fetchone()[0]
 
 ops = [
     ("INSERT",          "INSERT INTO dogs VALUES(2, 'Rex', 'brown')"),

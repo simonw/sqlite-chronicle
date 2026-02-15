@@ -137,7 +137,7 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     )
 
     # Snapshot table for INSERT OR REPLACE support
-    snapshot_table = f"_chronicle_{table_name}_snapshot"
+    snapshot_table = f"_chronicle_snapshot_{table_name}"
     sql_statements.append(
         f'CREATE TABLE IF NOT EXISTS "{snapshot_table}" '
         f"(key TEXT PRIMARY KEY, value TEXT)"
@@ -162,7 +162,7 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     an ``INSERT OR REPLACE`` on the main table.
     """
     chron = f"_chronicle_{table_name}"
-    snap = f"_chronicle_{table_name}_snapshot"
+    snap = f"_chronicle_snapshot_{table_name}"
     cur = conn.cursor()
 
     # get pk / non‐pk column lists from the primary table
@@ -329,7 +329,7 @@ def upgrade_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     if "added_ms" not in cols:
         return  # already migrated
 
-    snap = f"_chronicle_{table_name}_snapshot"
+    snap = f"_chronicle_snapshot_{table_name}"
 
     # Build an ALTER + DROP + CREATE script
     script = f"""
