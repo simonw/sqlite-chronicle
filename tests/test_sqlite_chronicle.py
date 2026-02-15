@@ -203,9 +203,7 @@ def test_insert_or_replace():
 
 def test_insert_or_replace_compound_pk():
     db = sqlite_utils.Database(memory=True)
-    db.execute(
-        "CREATE TABLE pairs (a TEXT, b INTEGER, val TEXT, PRIMARY KEY(a, b))"
-    )
+    db.execute("CREATE TABLE pairs (a TEXT, b INTEGER, val TEXT, PRIMARY KEY(a, b))")
     enable_chronicle(db.conn, "pairs")
     db.execute("INSERT INTO pairs VALUES ('x', 1, 'hello')")
 

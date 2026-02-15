@@ -203,9 +203,7 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
             + f') FROM "{table_name}" WHERE {match_new})'
         )
         snap_json = f'(SELECT value FROM "{snap}" WHERE key = {snap_key})'
-        update_when = " OR ".join(
-            f'OLD."{c}" IS NOT NEW."{c}"' for c in nonpks
-        )
+        update_when = " OR ".join(f'OLD."{c}" IS NOT NEW."{c}"' for c in nonpks)
     else:
         new_json = "'[]'"
         table_json = "'[]'"
