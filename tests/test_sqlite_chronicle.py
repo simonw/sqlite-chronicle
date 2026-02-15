@@ -254,3 +254,116 @@ def test_insert_or_replace_after_delete():
     )
     rows = chronicle_rows()
     assert rows == [{"id": 1, "version": 3, "deleted": 0}]
+
+
+def test_insert_or_replace_blob_column():
+    """INSERT OR REPLACE should work correctly with BLOB columns."""
+    db = sqlite_utils.Database(memory=True)
+    db.execute("CREATE TABLE files (id INTEGER PRIMARY KEY, name TEXT, data BLOB)")
+    enable_chronicle(db.conn, "files")
+
+    def chronicle_rows():
+        return list(
+            db.query(
+                "select id, __version as version, __deleted as deleted"
+                " from _chronicle_files order by id"
+            )
+        )
+
+    # Insert a row with a blob
+    db.execute("INSERT INTO files VALUES (1, 'a.bin', X'DEADBEEF')")
+    assert chronicle_rows() == [{"id": 1, "version": 1, "deleted": 0}]
+
+    # INSERT OR REPLACE with changed blob — should bump version
+    db.execute("INSERT OR REPLACE INTO files VALUES (1, 'a.bin', X'CAFEBABE')")
+    assert chronicle_rows() == [{"id": 1, "version": 2, "deleted": 0}]
+
+    # INSERT OR REPLACE with identical blob — no-op
+    db.execute("INSERT OR REPLACE INTO files VALUES (1, 'a.bin', X'CAFEBABE')")
+    assert chronicle_rows() == [{"id": 1, "version": 2, "deleted": 0}]
+
+    # Change the text column but keep the blob — should bump
+    db.execute("INSERT OR REPLACE INTO files VALUES (1, 'b.bin', X'CAFEBABE')")
+    assert chronicle_rows() == [{"id": 1, "version": 3, "deleted": 0}]
+
+    # Verify the actual data in the main table
+    row = db.execute("SELECT name, data FROM files WHERE id = 1").fetchone()
+    assert row[0] == "b.bin"
+    assert row[1] == b"\xca\xfe\xba\xbe"
+
+
+def test_insert_or_replace_null_values():
+    """INSERT OR REPLACE should handle NULL values correctly in change detection."""
+    db = sqlite_utils.Database(memory=True)
+    db.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, a TEXT, b INTEGER)")
+    enable_chronicle(db.conn, "items")
+
+    def version_of(pk):
+        return db.execute(
+            "SELECT __version FROM _chronicle_items WHERE id = ?", [pk]
+        ).fetchone()[0]
+
+    # Insert with NULLs
+    db.execute("INSERT INTO items VALUES (1, NULL, NULL)")
+    assert version_of(1) == 1
+
+    # Replace with identical NULLs — no-op
+    db.execute("INSERT OR REPLACE INTO items VALUES (1, NULL, NULL)")
+    assert version_of(1) == 1
+
+    # Replace NULL with a value — should bump
+    db.execute("INSERT OR REPLACE INTO items VALUES (1, 'hello', NULL)")
+    assert version_of(1) == 2
+
+    # Replace value with NULL — should bump
+    db.execute("INSERT OR REPLACE INTO items VALUES (1, NULL, NULL)")
+    assert version_of(1) == 3
+
+    # Identical NULLs again — no-op
+    db.execute("INSERT OR REPLACE INTO items VALUES (1, NULL, NULL)")
+    assert version_of(1) == 3
+
+
+def test_insert_or_replace_mixed_types():
+    """INSERT OR REPLACE change detection across TEXT, INTEGER, REAL, BLOB, and NULL."""
+    db = sqlite_utils.Database(memory=True)
+    db.execute(
+        "CREATE TABLE mix (id INTEGER PRIMARY KEY, t TEXT, i INTEGER, r REAL, b BLOB)"
+    )
+    enable_chronicle(db.conn, "mix")
+
+    def version_of(pk):
+        return db.execute(
+            "SELECT __version FROM _chronicle_mix WHERE id = ?", [pk]
+        ).fetchone()[0]
+
+    db.execute("INSERT INTO mix VALUES (1, 'hi', 42, 3.14, X'FF')")
+    assert version_of(1) == 1
+
+    # Identical — no-op
+    db.execute("INSERT OR REPLACE INTO mix VALUES (1, 'hi', 42, 3.14, X'FF')")
+    assert version_of(1) == 1
+
+    # Change just the text
+    db.execute("INSERT OR REPLACE INTO mix VALUES (1, 'bye', 42, 3.14, X'FF')")
+    assert version_of(1) == 2
+
+    # Change just the integer
+    db.execute("INSERT OR REPLACE INTO mix VALUES (1, 'bye', 99, 3.14, X'FF')")
+    assert version_of(1) == 3
+
+    # Change just the real
+    db.execute("INSERT OR REPLACE INTO mix VALUES (1, 'bye', 99, 2.72, X'FF')")
+    assert version_of(1) == 4
+
+    # Change just the blob
+    db.execute("INSERT OR REPLACE INTO mix VALUES (1, 'bye', 99, 2.72, X'00')")
+    assert version_of(1) == 5
+
+    # Set everything to NULL
+    db.execute("INSERT OR REPLACE INTO mix VALUES (1, NULL, NULL, NULL, NULL)")
+    assert version_of(1) == 6
+
+    # All NULLs again — no-op
+    db.execute("INSERT OR REPLACE INTO mix VALUES (1, NULL, NULL, NULL, NULL)")
+    assert version_of(1) == 6

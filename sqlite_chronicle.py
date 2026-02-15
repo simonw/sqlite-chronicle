@@ -192,12 +192,14 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
         snap_key = "json_array(" + ", ".join(f'NEW."{c}"' for c in pks) + ")"
         snap_key_old = "json_array(" + ", ".join(f'OLD."{c}"' for c in pks) + ")"
 
-    # JSON representation of non-PK columns for change detection
+    # JSON representation of non-PK columns for change detection.
+    # Wrap each value with quote() so BLOBs survive JSON serialization
+    # (json_array cannot hold raw BLOB values).
     if nonpks:
-        new_json = "json_array(" + ", ".join(f'NEW."{c}"' for c in nonpks) + ")"
+        new_json = "json_array(" + ", ".join(f'quote(NEW."{c}")' for c in nonpks) + ")"
         table_json = (
             "(SELECT json_array("
-            + ", ".join(f'"{c}"' for c in nonpks)
+            + ", ".join(f'quote("{c}")' for c in nonpks)
             + f') FROM "{table_name}" WHERE {match_new})'
         )
         snap_json = f'(SELECT value FROM "{snap}" WHERE key = {snap_key})'

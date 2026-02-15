@@ -148,7 +148,7 @@ FOR EACH ROW
 WHEN EXISTS(SELECT 1 FROM "dogs" WHERE "id"=NEW."id")
 BEGIN
   INSERT OR REPLACE INTO "_chronicle_snapshot_dogs"(key, value)
-  VALUES(CAST(NEW."id" AS TEXT), (SELECT json_array("name", "age") FROM "dogs" WHERE "id"=NEW."id"));
+  VALUES(CAST(NEW."id" AS TEXT), (SELECT json_array(quote("name"), quote("age")) FROM "dogs" WHERE "id"=NEW."id"));
 END;
 
 CREATE TRIGGER "chronicle_dogs_ai"
@@ -165,7 +165,7 @@ BEGIN
   SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER), __version = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1
   WHERE "id"=NEW."id" AND __deleted = 0
     AND EXISTS(SELECT 1 FROM "_chronicle_snapshot_dogs" WHERE key = CAST(NEW."id" AS TEXT))
-    AND json_array(NEW."name", NEW."age") IS NOT (SELECT value FROM "_chronicle_snapshot_dogs" WHERE key = CAST(NEW."id" AS TEXT));
+    AND json_array(quote(NEW."name"), quote(NEW."age")) IS NOT (SELECT value FROM "_chronicle_snapshot_dogs" WHERE key = CAST(NEW."id" AS TEXT));
 
   -- Clean up snapshot
   DELETE FROM "_chronicle_snapshot_dogs" WHERE key = CAST(NEW."id" AS TEXT);

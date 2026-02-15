@@ -567,7 +567,7 @@ After Re-insert                           -> snapshot rows: 0
 
 ## 13. Full test suite
 
-All 21 tests pass, including the three new INSERT OR REPLACE tests:
+All 24 tests pass, including the INSERT OR REPLACE tests for blob columns, NULL values, and mixed types:
 
 ```bash
 /usr/local/bin/python -m pytest tests/ -v 2>&1 | sed "s/in [0-9.]*s/in Xs/"
@@ -579,29 +579,32 @@ platform linux -- Python 3.11.14, pytest-9.0.2, pluggy-1.6.0 -- /usr/local/bin/p
 cachedir: .pytest_cache
 rootdir: /home/user/sqlite-chronicle
 configfile: pyproject.toml
-collecting ... collected 21 items
+collecting ... collected 24 items
 
 tests/test_cli.py::test_cli_main_success PASSED                          [  4%]
-tests/test_cli.py::test_cli_main_error_invalid_db PASSED                 [  9%]
-tests/test_cli.py::test_cli_main_bad_table PASSED                        [ 14%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-dogs] PASSED  [ 19%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-dogs and stuff] PASSED [ 23%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-weird.table.name] PASSED [ 28%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-dogs] PASSED  [ 33%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-dogs and stuff] PASSED [ 38%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-weird.table.name] PASSED [ 42%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle_alternative_primary_keys[pks0] PASSED [ 47%]
-tests/test_sqlite_chronicle.py::test_enable_chronicle_alternative_primary_keys[pks1] PASSED [ 52%]
-tests/test_sqlite_chronicle.py::test_upsert PASSED                       [ 57%]
-tests/test_sqlite_chronicle.py::test_insert_or_replace PASSED            [ 61%]
-tests/test_sqlite_chronicle.py::test_insert_or_replace_compound_pk PASSED [ 66%]
-tests/test_sqlite_chronicle.py::test_insert_or_replace_after_delete PASSED [ 71%]
-tests/test_updates_since.py::test_updates_since PASSED                   [ 76%]
-tests/test_updates_since.py::test_updates_since_more_rows_than_batch_size_when_enabled PASSED [ 80%]
-tests/test_updates_since.py::test_updates_since_more_rows_than_batch_size_in_an_update PASSED [ 85%]
-tests/test_upgrade.py::test_upgrade_drops_old_and_installs_new PASSED    [ 90%]
+tests/test_cli.py::test_cli_main_error_invalid_db PASSED                 [  8%]
+tests/test_cli.py::test_cli_main_bad_table PASSED                        [ 12%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-dogs] PASSED  [ 16%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-dogs and stuff] PASSED [ 20%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks0-weird.table.name] PASSED [ 25%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-dogs] PASSED  [ 29%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-dogs and stuff] PASSED [ 33%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle[pks1-weird.table.name] PASSED [ 37%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle_alternative_primary_keys[pks0] PASSED [ 41%]
+tests/test_sqlite_chronicle.py::test_enable_chronicle_alternative_primary_keys[pks1] PASSED [ 45%]
+tests/test_sqlite_chronicle.py::test_upsert PASSED                       [ 50%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace PASSED            [ 54%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace_compound_pk PASSED [ 58%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace_after_delete PASSED [ 62%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace_blob_column PASSED [ 66%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace_null_values PASSED [ 70%]
+tests/test_sqlite_chronicle.py::test_insert_or_replace_mixed_types PASSED [ 75%]
+tests/test_updates_since.py::test_updates_since PASSED                   [ 79%]
+tests/test_updates_since.py::test_updates_since_more_rows_than_batch_size_when_enabled PASSED [ 83%]
+tests/test_updates_since.py::test_updates_since_more_rows_than_batch_size_in_an_update PASSED [ 87%]
+tests/test_upgrade.py::test_upgrade_drops_old_and_installs_new PASSED    [ 91%]
 tests/test_upgrade.py::test_idempotent_and_noop_on_nonexistent PASSED    [ 95%]
 tests/test_upgrade.py::test_noop_if_already_new_schema PASSED            [100%]
 
-============================== 21 passed in Xs ==============================
+============================== 24 passed in Xs ==============================
 ```
