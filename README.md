@@ -22,13 +22,19 @@ pip install sqlite-chronicle
 You can enable chronicle for specific tables in a SQLite database using the command-line interface, passing in one or more table names:
 
 ```bash
-python -m sqlite_chronicle database.db table_1 table_2
+sqlite-chronicle database.db table_1 table_2
 ```
 
 To disable chronicle tracking, use the `--disable` flag:
 
 ```bash
-python -m sqlite_chronicle database.db table_1 --disable
+sqlite-chronicle database.db table_1 --disable
+```
+
+You can also run this tool without installing it first using [uvx](https://docs.astral.sh/uv/concepts/tools/):
+
+```bash
+uvx sqlite-chronicle --help
 ```
 
 ## Python API

@@ -1,7 +1,10 @@
 import dataclasses
 import sqlite3
 import textwrap
+from importlib.metadata import version as _get_version
 from typing import Any, Generator, Optional, List, Tuple, Dict
+
+__version__ = _get_version("sqlite-chronicle")
 
 
 class ChronicleError(Exception):
@@ -88,9 +91,7 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
         f'"{col}" {col_type}' for col, col_type in primary_key_columns
     )
     pk_constraint = ", ".join(f'"{col}"' for col in primary_key_names)
-    sql_statements.append(
-        textwrap.dedent(
-            f"""
+    sql_statements.append(textwrap.dedent(f"""
             CREATE TABLE "{chronicle_table}" (
               {pk_definitions},
               __added_ms INTEGER,
@@ -99,17 +100,11 @@ def enable_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
               __deleted INTEGER DEFAULT 0,
               PRIMARY KEY({pk_constraint})
             )
-        """
-        ).strip()
-    )
-    sql_statements.append(
-        textwrap.dedent(
-            f"""
+        """).strip())
+    sql_statements.append(textwrap.dedent(f"""
             CREATE INDEX "{chronicle_table}__version_idx"
               ON "{chronicle_table}"(__version);
-        """
-        ).strip()
-    )
+        """).strip())
 
     # 2) Seed chronicle table with existing rows
     version_expr = (
@@ -213,9 +208,7 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     stmts: List[str] = []
 
     # BEFORE INSERT — snapshot old row data before REPLACE's internal delete
-    stmts.append(
-        textwrap.dedent(
-            f"""
+    stmts.append(textwrap.dedent(f"""
     CREATE TRIGGER "chronicle_{table_name}_bi"
     BEFORE INSERT ON "{table_name}"
     FOR EACH ROW
@@ -224,16 +217,12 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
       INSERT OR REPLACE INTO "{snap}"(table_name, key, value)
       VALUES('{escaped_name}', {snap_key}, {table_json});
     END;
-    """
-        ).strip()
-    )
+    """).strip())
 
     # AFTER INSERT — handles fresh inserts, replaces, and re-inserts
     # CRITICAL: Uses INSERT...WHERE NOT EXISTS instead of INSERT OR IGNORE
     # to avoid SQLite's conflict resolution propagation.
-    stmts.append(
-        textwrap.dedent(
-            f"""
+    stmts.append(textwrap.dedent(f"""
     CREATE TRIGGER "chronicle_{table_name}_ai"
     AFTER INSERT ON "{table_name}"
     FOR EACH ROW
@@ -258,14 +247,10 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
       SELECT {new_pk_list}, {ts}, {ts}, {nextv}, 0
       WHERE NOT EXISTS(SELECT 1 FROM "{chron}" WHERE {match_new});
     END;
-    """
-        ).strip()
-    )
+    """).strip())
 
     # AFTER UPDATE
-    stmts.append(
-        textwrap.dedent(
-            f"""
+    stmts.append(textwrap.dedent(f"""
     CREATE TRIGGER "chronicle_{table_name}_au"
     AFTER UPDATE ON "{table_name}"
     FOR EACH ROW
@@ -276,17 +261,13 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
         __version = {nextv}
       WHERE {match_new};
     END;
-    """
-        ).strip()
-    )
+    """).strip())
 
     # AFTER DELETE — skip if snapshot exists (we are inside INSERT OR REPLACE,
     # which is handled by the AFTER INSERT trigger instead).  When
     # recursive_triggers is ON, the implicit DELETE within REPLACE fires
     # this trigger; the snapshot check prevents a spurious __deleted=1 bump.
-    stmts.append(
-        textwrap.dedent(
-            f"""
+    stmts.append(textwrap.dedent(f"""
     CREATE TRIGGER "chronicle_{table_name}_ad"
     AFTER DELETE ON "{table_name}"
     FOR EACH ROW
@@ -298,9 +279,7 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
           __deleted = 1
       WHERE {match_old};
     END;
-    """
-        ).strip()
-    )
+    """).strip())
     return stmts
 
 
@@ -478,8 +457,7 @@ def updates_since(
     )
     join = " AND ".join(f'c."{c}" = t."{c}"' for c in pk_names)
 
-    sql = textwrap.dedent(
-        f"""
+    sql = textwrap.dedent(f"""
         SELECT {select}
           FROM "{chron}" AS c
           LEFT JOIN "{table_name}" AS t
@@ -487,8 +465,7 @@ def updates_since(
          WHERE c.__version > ?
          ORDER BY c.__version
          LIMIT {batch_size}
-        """
-    ).strip()
+        """).strip()
 
     while True:
         rows = cur.execute(sql, (since,)).fetchall()
@@ -526,8 +503,24 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
     import sys
 
     parser = argparse.ArgumentParser(
-        prog="python -m sqlite_chronicle",
-        description="Enable or disable chronicle tracking on tables in an SQLite DB.",
+        prog="sqlite-chronicle",
+        description=(
+            "Use triggers to track when rows in a SQLite table were updated or deleted.\n"
+            "\n"
+            "Creates a _chronicle_<table> table to accompany each tracked table. Every\n"
+            "row in the original table gets a corresponding chronicle row that records\n"
+            "when it was added (__added_ms), last updated (__updated_ms), an incrementing\n"
+            "version number (__version), and whether it was deleted (__deleted). These\n"
+            "chronicle rows are maintained automatically by SQLite triggers on INSERT,\n"
+            "UPDATE, and DELETE, so you can efficiently identify which rows have changed\n"
+            "since a previous version."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument("db_path", help="Path to the SQLite database file")
     parser.add_argument(
@@ -571,7 +564,11 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
     return 1 if any_error else 0
 
 
-if __name__ == "__main__":
+def cli_main_entry():
     import sys
 
     sys.exit(cli_main())
+
+
+if __name__ == "__main__":
+    cli_main_entry()
