@@ -1,5 +1,15 @@
 import sqlite3
-from sqlite_chronicle import cli_main, enable_chronicle
+
+import pytest
+from sqlite_chronicle import cli_main, enable_chronicle, __version__
+
+
+def test_cli_version(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        cli_main(["--version"])
+    assert exc_info.value.code == 0
+    captured = capsys.readouterr()
+    assert __version__ in captured.out
 
 
 def test_cli_main_success(tmp_path, capsys):
