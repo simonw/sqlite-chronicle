@@ -141,3 +141,116 @@ def test_upsert():
     # Upsert that should be a no-op
     dogs.upsert({"id": 1, "name": "Cleo", "color": "brown"})
     assert chronicle_rows() == [{"id": 1, "version": 3}, {"id": 2, "version": 2}]
+
+
+def test_insert_or_replace():
+    db = sqlite_utils.Database(memory=True)
+    dogs = db.table("dogs", pk="id").create(
+        {"id": int, "name": str, "color": str}, pk="id"
+    )
+    enable_chronicle(db.conn, "dogs")
+    dogs.insert({"id": 1, "name": "Cleo", "color": "black"})
+
+    def chronicle_rows():
+        return list(
+            db.query(
+                "select id, __version as version, __deleted as deleted"
+                " from _chronicle_dogs order by id"
+            )
+        )
+
+    assert chronicle_rows() == [
+        {"id": 1, "version": 1, "deleted": 0},
+    ]
+
+    # Record the original added_ms
+    original_added_ms = db.execute(
+        "select __added_ms from _chronicle_dogs where id = 1"
+    ).fetchone()[0]
+
+    time.sleep(0.01)
+
+    # INSERT OR REPLACE that changes data — should bump version, preserve added_ms
+    db.execute(
+        "INSERT OR REPLACE INTO dogs (id, name, color) VALUES (1, 'Cleo', 'brown')"
+    )
+    rows = chronicle_rows()
+    assert rows == [{"id": 1, "version": 2, "deleted": 0}]
+    added_after_replace = db.execute(
+        "select __added_ms from _chronicle_dogs where id = 1"
+    ).fetchone()[0]
+    assert added_after_replace == original_added_ms, "added_ms should be preserved"
+
+    time.sleep(0.01)
+
+    # INSERT OR REPLACE with identical data — should be a no-op (no version bump)
+    db.execute(
+        "INSERT OR REPLACE INTO dogs (id, name, color) VALUES (1, 'Cleo', 'brown')"
+    )
+    rows = chronicle_rows()
+    assert rows == [{"id": 1, "version": 2, "deleted": 0}]
+
+    # INSERT OR REPLACE on a new row — should work like a regular insert
+    db.execute(
+        "INSERT OR REPLACE INTO dogs (id, name, color) VALUES (2, 'Pancakes', 'corgi')"
+    )
+    rows = chronicle_rows()
+    assert rows == [
+        {"id": 1, "version": 2, "deleted": 0},
+        {"id": 2, "version": 3, "deleted": 0},
+    ]
+
+
+def test_insert_or_replace_compound_pk():
+    db = sqlite_utils.Database(memory=True)
+    db.execute(
+        "CREATE TABLE pairs (a TEXT, b INTEGER, val TEXT, PRIMARY KEY(a, b))"
+    )
+    enable_chronicle(db.conn, "pairs")
+    db.execute("INSERT INTO pairs VALUES ('x', 1, 'hello')")
+
+    def chronicle_rows():
+        return list(
+            db.query(
+                "select a, b, __version as version, __deleted as deleted"
+                " from _chronicle_pairs order by a, b"
+            )
+        )
+
+    assert chronicle_rows() == [{"a": "x", "b": 1, "version": 1, "deleted": 0}]
+
+    # INSERT OR REPLACE with changed data
+    db.execute("INSERT OR REPLACE INTO pairs VALUES ('x', 1, 'world')")
+    assert chronicle_rows() == [{"a": "x", "b": 1, "version": 2, "deleted": 0}]
+
+    # INSERT OR REPLACE with identical data — no version bump
+    db.execute("INSERT OR REPLACE INTO pairs VALUES ('x', 1, 'world')")
+    assert chronicle_rows() == [{"a": "x", "b": 1, "version": 2, "deleted": 0}]
+
+
+def test_insert_or_replace_after_delete():
+    """Re-inserting via INSERT OR REPLACE after a delete should un-delete the chronicle row."""
+    db = sqlite_utils.Database(memory=True)
+    dogs = db.table("dogs", pk="id").create(
+        {"id": int, "name": str, "color": str}, pk="id"
+    )
+    enable_chronicle(db.conn, "dogs")
+    dogs.insert({"id": 1, "name": "Cleo", "color": "black"})
+    db.execute("DELETE FROM dogs WHERE id = 1")
+
+    def chronicle_rows():
+        return list(
+            db.query(
+                "select id, __version as version, __deleted as deleted"
+                " from _chronicle_dogs order by id"
+            )
+        )
+
+    assert chronicle_rows() == [{"id": 1, "version": 2, "deleted": 1}]
+
+    # Re-insert via INSERT OR REPLACE
+    db.execute(
+        "INSERT OR REPLACE INTO dogs (id, name, color) VALUES (1, 'Cleo', 'brown')"
+    )
+    rows = chronicle_rows()
+    assert rows == [{"id": 1, "version": 3, "deleted": 0}]
