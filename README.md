@@ -5,7 +5,7 @@
 [![Tests](https://github.com/simonw/sqlite-chronicle/workflows/Test/badge.svg)](https://github.com/simonw/sqlite-chronicle/actions?query=workflow%3ATest)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://github.com/simonw/sqlite-chronicle/blob/main/LICENSE)
 
-Use triggers to track when rows in a SQLite table were updated or deleted
+Use triggers to track when rows in a SQLite table were inserted, updated, or deleted
 
 ## Core idea
 
