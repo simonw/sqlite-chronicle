@@ -530,7 +530,18 @@ def cli_main(argv: Optional[List[str]] = None) -> int:
 
     parser = argparse.ArgumentParser(
         prog="sqlite-chronicle",
-        description="Enable or disable chronicle tracking on tables in an SQLite DB.",
+        description=(
+            "Use triggers to track when rows in a SQLite table were updated or deleted.\n"
+            "\n"
+            "Creates a _chronicle_<table> table to accompany each tracked table. Every\n"
+            "row in the original table gets a corresponding chronicle row that records\n"
+            "when it was added (__added_ms), last updated (__updated_ms), an incrementing\n"
+            "version number (__version), and whether it was deleted (__deleted). These\n"
+            "chronicle rows are maintained automatically by SQLite triggers on INSERT,\n"
+            "UPDATE, and DELETE, so you can efficiently identify which rows have changed\n"
+            "since a previous version."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
         "--version",
