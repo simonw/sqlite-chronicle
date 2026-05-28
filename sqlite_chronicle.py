@@ -356,9 +356,11 @@ def list_chronicled_tables(conn: sqlite3.Connection) -> List[str]:
     """
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '_chronicle_%' AND name != '_chroniclesnapshots'"
+        r"SELECT name FROM sqlite_master WHERE type='table' "
+        r"AND name LIKE '\_chronicle\_%' ESCAPE '\'"
     )
-    return [row[0][11:] for row in cursor.fetchall()]  # Strip '_chronicle_' prefix
+    prefix = "_chronicle_"
+    return [row[0][len(prefix):] for row in cursor.fetchall()]
 
 
 def upgrade_chronicle(conn: sqlite3.Connection, table_name: str) -> None:

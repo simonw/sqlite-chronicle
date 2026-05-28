@@ -94,3 +94,16 @@ def test_list_chronicled_tables_special_names():
 
     result = list_chronicled_tables(db.conn)
     assert sorted(result) == ["dogs and stuff", "weird.table.name"]
+
+
+def test_list_chronicled_tables_ignores_like_wildcard_matches():
+    # The discovery query uses LIKE '_chronicle_%', where '_' is a wildcard.
+    # A table whose name happens to fit that pattern (any char + 'chronicle'
+    # + any char + anything) must not be reported as chronicled.
+    db = sqlite_utils.Database(memory=True)
+    db["dogs"].insert({"id": 1, "name": "Cleo"}, pk="id")
+    enable_chronicle(db.conn, "dogs")
+    # Position 0 wildcard matches 'X', position 10 wildcard matches 'a'.
+    db.execute('CREATE TABLE "Xchronicleafoo" (id INTEGER PRIMARY KEY)')
+
+    assert list_chronicled_tables(db.conn) == ["dogs"]
