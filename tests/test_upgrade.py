@@ -13,8 +13,7 @@ def legacy_db():
     c.execute("CREATE TABLE dogs (id INTEGER PRIMARY KEY, name TEXT, age INTEGER)")
 
     # legacy chronicle table + index + old triggers
-    c.executescript(
-        """
+    c.executescript("""
     CREATE TABLE "_chronicle_dogs" (
       id         INTEGER,
       added_ms   INTEGER,
@@ -50,8 +49,7 @@ def legacy_db():
     END;
 
     INSERT INTO dogs(id,name,age) VALUES(1,'Fido',5);
-    """
-    )
+    """)
     conn.commit()
     return conn
 
@@ -111,8 +109,7 @@ def test_noop_if_already_new_schema():
     conn = sqlite3.connect(":memory:")
     cur = conn.cursor()
     cur.execute("CREATE TABLE bar(id INTEGER PRIMARY KEY)")
-    cur.executescript(
-        """
+    cur.executescript("""
     CREATE TABLE "_chronicle_bar"(
       id INTEGER,
       __added_ms INTEGER,
@@ -123,8 +120,7 @@ def test_noop_if_already_new_schema():
     );
     CREATE INDEX "_chronicle_bar__version_idx"
       ON "_chronicle_bar"(__version);
-    """
-    )
+    """)
     conn.commit()
 
     # Should not error or change anything
