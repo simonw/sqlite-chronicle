@@ -50,10 +50,10 @@ This module provides a function: `sqlite_chronicle.enable_chronicle(conn, table_
 3. Creates a new row in the chronicle table corresponding to every row in the original table, setting `__added_ms` and `__updated_ms` to the current timestamp in milliseconds, and `__version` column that starts at 1 and increments for each subsequent row
 4. Sets up four triggers on the table:
 
-  - A BEFORE INSERT trigger, which snapshots existing row data into a helper table to support `INSERT OR REPLACE` change detection
+  - A BEFORE INSERT trigger, which snapshots the existing row's data and chronicle state into a helper table to support `INSERT OR REPLACE` change detection, first discarding any snapshot left behind by an earlier `INSERT OR IGNORE` or `ON CONFLICT` clause
   - An AFTER INSERT trigger, which creates a new row in the chronicle table, sets `__added_ms` and `__updated_ms` to the current time and sets the `__version` to one higher than the current maximum version for that table. For `INSERT OR REPLACE`, it compares against the snapshot to detect whether the data actually changed
-  - An AFTER UPDATE trigger, which updates the `__updated_ms` timestamp and increments the `__version` - but only if at least one column in the row has changed
-  - An AFTER DELETE trigger, which updates the `__updated_ms`, increments the `__version` and places a `1` in the `deleted` column - but only for real deletes, not the implicit delete inside `INSERT OR REPLACE`
+  - An AFTER UPDATE trigger, which updates the `__updated_ms` timestamp and increments the `__version` - but only if at least one column in the row has changed. It also clears the snapshot left behind by an `INSERT ... ON CONFLICT DO UPDATE`
+  - An AFTER DELETE trigger, which updates the `__updated_ms`, increments the `__version` and places a `1` in the `deleted` column. If [recursive triggers](https://www.sqlite.org/pragma.html#pragma_recursive_triggers) are enabled this also fires for the implicit delete inside `INSERT OR REPLACE`, which the AFTER INSERT trigger then reverts using the snapshot
 
 The function will raise a `sqlite_chronicle.ChronicleError` exception if the table does not exist or if it does not have a single or compound primary key, 
 
@@ -120,6 +120,8 @@ print(f"Chronicle is enabled for: {tables}")
 ### upgrade_chronicle(conn, table_name)
 
 This function detects if the specified table has previously had an older version of the chronicle table and triggers created for it, and if so it will upgrade that table to the latest implementation, preserving existing timestamp and version data.
+
+It also replaces triggers that were created by an older version of this library with the current ones. Run this after upgrading `sqlite-chronicle` to pick up trigger fixes for tables that already have chronicle enabled.
 
 ### updates_since(conn, table_name, since=None, batch_size=1000)
 
@@ -210,27 +212,39 @@ CREATE TABLE "_chroniclesnapshots" (table_name TEXT, key TEXT, value TEXT, PRIMA
 CREATE TRIGGER "chronicle_dogs_bi"
 BEFORE INSERT ON "dogs"
 FOR EACH ROW
-WHEN EXISTS(SELECT 1 FROM "dogs" WHERE "id"=NEW."id")
 BEGIN
-  INSERT OR REPLACE INTO "_chroniclesnapshots"(table_name, key, value)
-  VALUES('dogs', CAST(NEW."id" AS TEXT), (SELECT json_array(quote("name"), quote("age")) FROM "dogs" WHERE "id"=NEW."id"));
+  DELETE FROM "_chroniclesnapshots" WHERE table_name = 'dogs' AND key = CAST(NEW."id" AS TEXT);
+  INSERT INTO "_chroniclesnapshots"(table_name, key, value)
+  SELECT 'dogs', CAST(NEW."id" AS TEXT), json_array((SELECT json_array(quote("name"), quote("age")) FROM "dogs" WHERE "id"=NEW."id") || '', __updated_ms, __version)
+  FROM "_chronicle_dogs"
+  WHERE "id"=NEW."id" AND EXISTS(SELECT 1 FROM "dogs" WHERE "id"=NEW."id");
 END;
 
 CREATE TRIGGER "chronicle_dogs_ai"
 AFTER INSERT ON "dogs"
 FOR EACH ROW
 BEGIN
-  -- Un-delete if re-inserting a previously deleted row
+  -- Replace with identical data: restore the pre-statement chronicle state
+  -- (undoes the delete recorded when recursive_triggers is ON)
+  UPDATE "_chronicle_dogs"
+  SET __updated_ms = json_extract((SELECT value FROM "_chroniclesnapshots" WHERE table_name = 'dogs' AND key = CAST(NEW."id" AS TEXT)), '$[1]'),
+    __version = json_extract((SELECT value FROM "_chroniclesnapshots" WHERE table_name = 'dogs' AND key = CAST(NEW."id" AS TEXT)), '$[2]'),
+    __deleted = 0
+  WHERE "id"=NEW."id" AND json_array(quote(NEW."name"), quote(NEW."age")) = json_extract((SELECT value FROM "_chroniclesnapshots" WHERE table_name = 'dogs' AND key = CAST(NEW."id" AS TEXT)), '$[0]');
+
+  -- Replace with actual change: bump version (if the implicit delete
+  -- was recorded, it already assigned this statement a fresh version)
+  UPDATE "_chronicle_dogs"
+  SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),
+    __version = CASE WHEN __deleted = 1 THEN __version ELSE COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1 END,
+    __deleted = 0
+  WHERE "id"=NEW."id" AND json_array(quote(NEW."name"), quote(NEW."age")) <> json_extract((SELECT value FROM "_chroniclesnapshots" WHERE table_name = 'dogs' AND key = CAST(NEW."id" AS TEXT)), '$[0]');
+
+  -- Un-delete if re-inserting a previously deleted row (replaces were
+  -- already handled above, so __deleted = 1 here means a real re-insert)
   UPDATE "_chronicle_dogs"
   SET __added_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER), __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER), __version = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1, __deleted = 0
   WHERE "id"=NEW."id" AND __deleted = 1;
-
-  -- Replace with actual change: bump version
-  UPDATE "_chronicle_dogs"
-  SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER), __version = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1
-  WHERE "id"=NEW."id" AND __deleted = 0
-    AND EXISTS(SELECT 1 FROM "_chroniclesnapshots" WHERE table_name = 'dogs' AND key = CAST(NEW."id" AS TEXT))
-    AND json_array(quote(NEW."name"), quote(NEW."age")) IS NOT (SELECT value FROM "_chroniclesnapshots" WHERE table_name = 'dogs' AND key = CAST(NEW."id" AS TEXT));
 
   -- Clean up snapshot
   DELETE FROM "_chroniclesnapshots" WHERE table_name = 'dogs' AND key = CAST(NEW."id" AS TEXT);
@@ -244,18 +258,17 @@ END;
 CREATE TRIGGER "chronicle_dogs_au"
 AFTER UPDATE ON "dogs"
 FOR EACH ROW
-WHEN OLD."name" IS NOT NEW."name" OR OLD."age" IS NOT NEW."age"
 BEGIN
   UPDATE "_chronicle_dogs"
   SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),
     __version = COALESCE((SELECT MAX(__version) FROM "_chronicle_dogs"),0) + 1
-  WHERE "id"=NEW."id";
+  WHERE "id"=NEW."id" AND (OLD."name" IS NOT NEW."name" OR OLD."age" IS NOT NEW."age");
+  DELETE FROM "_chroniclesnapshots" WHERE table_name = 'dogs' AND key = CAST(NEW."id" AS TEXT);
 END;
 
 CREATE TRIGGER "chronicle_dogs_ad"
 AFTER DELETE ON "dogs"
 FOR EACH ROW
-WHEN NOT EXISTS(SELECT 1 FROM "_chroniclesnapshots" WHERE table_name = 'dogs' AND key = CAST(OLD."id" AS TEXT))
 BEGIN
   UPDATE "_chronicle_dogs"
     SET __updated_ms = CAST((julianday('now') - 2440587.5)*86400*1000 AS INTEGER),

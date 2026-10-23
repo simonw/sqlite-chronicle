@@ -131,3 +131,38 @@ def test_noop_if_already_new_schema():
     assert trig == 0
     cols = {r[1] for r in conn.execute('PRAGMA table_info("_chronicle_bar")')}
     assert "__added_ms" in cols and "added_ms" not in cols
+
+
+def test_upgrade_replaces_outdated_triggers():
+    from sqlite_chronicle import enable_chronicle
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE dogs (id INTEGER PRIMARY KEY, name TEXT)")
+    enable_chronicle(conn, "dogs")
+
+    def triggers():
+        return conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='trigger' ORDER BY name"
+        ).fetchall()
+
+    current = triggers()
+    # Swap in the AFTER DELETE trigger from sqlite-chronicle 0.6.1, which
+    # skipped the delete whenever a snapshot existed for that row
+    conn.executescript("""
+    DROP TRIGGER "chronicle_dogs_ad";
+    CREATE TRIGGER "chronicle_dogs_ad"
+    AFTER DELETE ON "dogs"
+    FOR EACH ROW
+    WHEN NOT EXISTS(SELECT 1 FROM "_chroniclesnapshots" WHERE table_name = 'dogs' AND key = CAST(OLD."id" AS TEXT))
+    BEGIN
+      UPDATE "_chronicle_dogs" SET __deleted = 1 WHERE "id"=OLD."id";
+    END;
+    """)
+    assert triggers() != current
+
+    upgrade_chronicle(conn, "dogs")
+    assert triggers() == current
+
+    # Running it again is a no-op
+    upgrade_chronicle(conn, "dogs")
+    assert triggers() == current

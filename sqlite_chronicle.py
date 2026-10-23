@@ -182,10 +182,9 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     # Snapshot key expression (single PK → cast, compound → json_array)
     if len(pks) == 1:
         snap_key = f'CAST(NEW."{pks[0]}" AS TEXT)'
-        snap_key_old = f'CAST(OLD."{pks[0]}" AS TEXT)'
     else:
         snap_key = "json_array(" + ", ".join(f'NEW."{c}"' for c in pks) + ")"
-        snap_key_old = "json_array(" + ", ".join(f'OLD."{c}"' for c in pks) + ")"
+    snap_match = f"table_name = '{escaped_name}' AND key = {snap_key}"
 
     # JSON representation of non-PK columns for change detection.
     # Wrap each value with quote() so BLOBs survive JSON serialization
@@ -197,25 +196,35 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
             + ", ".join(f'quote("{c}")' for c in nonpks)
             + f') FROM "{table_name}" WHERE {match_new})'
         )
-        snap_json = f"(SELECT value FROM \"{snap}\" WHERE table_name = '{escaped_name}' AND key = {snap_key})"
         update_when = " OR ".join(f'OLD."{c}" IS NOT NEW."{c}"' for c in nonpks)
     else:
         new_json = "'[]'"
         table_json = "'[]'"
-        snap_json = "'[]'"
         update_when = "1"
+
+    # A snapshot value is json_array(row_json, __updated_ms, __version): the
+    # row's values plus its chronicle state from before the INSERT began.
+    # row_json is stored as a JSON string (via || '') so it round-trips exactly.
+    snap_value = f'(SELECT value FROM "{snap}" WHERE {snap_match})'
+    snap_json = f"json_extract({snap_value}, '$[0]')"
 
     stmts: List[str] = []
 
-    # BEFORE INSERT — snapshot old row data before REPLACE's internal delete
+    # BEFORE INSERT — snapshot the existing row (if any) in case this is an
+    # INSERT OR REPLACE. Any older snapshot for this key is discarded first:
+    # INSERT OR IGNORE and ON CONFLICT never reach the AFTER INSERT trigger,
+    # so they leave stale snapshots behind. Clearing them here guarantees the
+    # AFTER INSERT trigger only ever sees a snapshot taken by its own statement.
     stmts.append(textwrap.dedent(f"""
     CREATE TRIGGER "chronicle_{table_name}_bi"
     BEFORE INSERT ON "{table_name}"
     FOR EACH ROW
-    WHEN EXISTS(SELECT 1 FROM "{table_name}" WHERE {match_new})
     BEGIN
-      INSERT OR REPLACE INTO "{snap}"(table_name, key, value)
-      VALUES('{escaped_name}', {snap_key}, {table_json});
+      DELETE FROM "{snap}" WHERE {snap_match};
+      INSERT INTO "{snap}"(table_name, key, value)
+      SELECT '{escaped_name}', {snap_key}, json_array({table_json} || '', __updated_ms, __version)
+      FROM "{chron}"
+      WHERE {match_new} AND EXISTS(SELECT 1 FROM "{table_name}" WHERE {match_new});
     END;
     """).strip())
 
@@ -227,20 +236,30 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     AFTER INSERT ON "{table_name}"
     FOR EACH ROW
     BEGIN
-      -- Un-delete if re-inserting a previously deleted row
+      -- Replace with identical data: restore the pre-statement chronicle state
+      -- (undoes the delete recorded when recursive_triggers is ON)
+      UPDATE "{chron}"
+      SET __updated_ms = json_extract({snap_value}, '$[1]'),
+        __version = json_extract({snap_value}, '$[2]'),
+        __deleted = 0
+      WHERE {match_new} AND {new_json} = {snap_json};
+
+      -- Replace with actual change: bump version (if the implicit delete
+      -- was recorded, it already assigned this statement a fresh version)
+      UPDATE "{chron}"
+      SET __updated_ms = {ts},
+        __version = CASE WHEN __deleted = 1 THEN __version ELSE {nextv} END,
+        __deleted = 0
+      WHERE {match_new} AND {new_json} <> {snap_json};
+
+      -- Un-delete if re-inserting a previously deleted row (replaces were
+      -- already handled above, so __deleted = 1 here means a real re-insert)
       UPDATE "{chron}"
       SET __added_ms = {ts}, __updated_ms = {ts}, __version = {nextv}, __deleted = 0
       WHERE {match_new} AND __deleted = 1;
 
-      -- Replace with actual change: bump version
-      UPDATE "{chron}"
-      SET __updated_ms = {ts}, __version = {nextv}
-      WHERE {match_new} AND __deleted = 0
-        AND EXISTS(SELECT 1 FROM "{snap}" WHERE table_name = '{escaped_name}' AND key = {snap_key})
-        AND {new_json} IS NOT {snap_json};
-
       -- Clean up snapshot
-      DELETE FROM "{snap}" WHERE table_name = '{escaped_name}' AND key = {snap_key};
+      DELETE FROM "{snap}" WHERE {snap_match};
 
       -- Fresh insert: create chronicle entry (NO INSERT OR IGNORE!)
       INSERT INTO "{chron}"({pk_list}, __added_ms, __updated_ms, __version, __deleted)
@@ -249,29 +268,28 @@ def _chronicle_triggers(conn: sqlite3.Connection, table_name: str) -> List[str]:
     END;
     """).strip())
 
-    # AFTER UPDATE
+    # AFTER UPDATE — also drops the snapshot left by an upsert
+    # (INSERT ... ON CONFLICT DO UPDATE fires BEFORE INSERT but not AFTER INSERT)
     stmts.append(textwrap.dedent(f"""
     CREATE TRIGGER "chronicle_{table_name}_au"
     AFTER UPDATE ON "{table_name}"
     FOR EACH ROW
-    WHEN {update_when}
     BEGIN
       UPDATE "{chron}"
       SET __updated_ms = {ts},
         __version = {nextv}
-      WHERE {match_new};
+      WHERE {match_new} AND ({update_when});
+      DELETE FROM "{snap}" WHERE {snap_match};
     END;
     """).strip())
 
-    # AFTER DELETE — skip if snapshot exists (we are inside INSERT OR REPLACE,
-    # which is handled by the AFTER INSERT trigger instead).  When
-    # recursive_triggers is ON, the implicit DELETE within REPLACE fires
-    # this trigger; the snapshot check prevents a spurious __deleted=1 bump.
+    # AFTER DELETE — always records the delete. When recursive_triggers is ON
+    # this also fires for the implicit DELETE inside INSERT OR REPLACE; the
+    # AFTER INSERT trigger then restores or bumps the row using the snapshot.
     stmts.append(textwrap.dedent(f"""
     CREATE TRIGGER "chronicle_{table_name}_ad"
     AFTER DELETE ON "{table_name}"
     FOR EACH ROW
-    WHEN NOT EXISTS(SELECT 1 FROM "{snap}" WHERE table_name = '{escaped_name}' AND key = {snap_key_old})
     BEGIN
       UPDATE "{chron}"
         SET __updated_ms = {ts},
@@ -368,6 +386,8 @@ def upgrade_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     - If _chronicle_<table_name> does not exist → no-op
     - If it *does* exist and still has columns named
       added_ms, updated_ms, version, deleted then migrate to new table
+    - If it is already on the new schema but its triggers were created by an
+      older version of this library, replace them with the current triggers
     """
     chron = f"_chronicle_{table_name}"
     cur = conn.cursor()
@@ -384,7 +404,9 @@ def upgrade_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
     cur.execute(f'PRAGMA table_info("{chron}")')
     cols = [r[1] for r in cur.fetchall()]
     if "added_ms" not in cols:
-        return  # already migrated
+        # already migrated - but the triggers may still be outdated
+        _refresh_outdated_triggers(conn, table_name)
+        return
 
     # Build an ALTER + DROP + CREATE script
     script = f"""
@@ -415,6 +437,27 @@ def upgrade_chronicle(conn: sqlite3.Connection, table_name: str) -> None:
         conn.executescript(script)
         # 4) re‐create the new triggers
         for stmt in _chronicle_triggers(conn, table_name):
+            conn.execute(stmt)
+
+
+def _refresh_outdated_triggers(conn: sqlite3.Connection, table_name: str) -> None:
+    names = [f"chronicle_{table_name}_{suffix}" for suffix in ("bi", "ai", "au", "ad")]
+    existing = dict(
+        conn.execute(
+            "SELECT name, sql FROM sqlite_master WHERE type='trigger' AND name IN (?, ?, ?, ?)",
+            names,
+        ).fetchall()
+    )
+    if not existing:
+        return
+    # sqlite_master stores each CREATE TRIGGER without its trailing semicolon
+    expected = [stmt.rstrip(";") for stmt in _chronicle_triggers(conn, table_name)]
+    if [existing.get(name) for name in names] == expected:
+        return
+    with conn:
+        for name in names:
+            conn.execute(f'DROP TRIGGER IF EXISTS "{name}"')
+        for stmt in expected:
             conn.execute(stmt)
 
 
