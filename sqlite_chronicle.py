@@ -437,6 +437,12 @@ def updates_since(
         Change objects with pks, added_ms, updated_ms, version, row, and deleted fields.
         Results are ordered by version ascending.
     """
+    if not is_chronicle_enabled(conn, table_name):
+        raise ChronicleError(f"chronicle is not enabled for table {table_name!r}")
+
+    if not is_chronicle_enabled(conn, table_name):
+        raise ChronicleError(f"chronicle is not enabled for table {table_name!r}")
+
     cur = conn.cursor()
     cur.row_factory = sqlite3.Row  # type: ignore[assignment]
     if since is None:
