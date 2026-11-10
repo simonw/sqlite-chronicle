@@ -1,4 +1,4 @@
-from sqlite_chronicle import enable_chronicle, updates_since, Change
+from sqlite_chronicle import ChronicleError, enable_chronicle, updates_since, Change
 from sqlite_utils import Database
 import pytest
 from unittest.mock import ANY
@@ -170,3 +170,18 @@ def test_updates_since_special_table_names(table_name):
     assert len(changes) == 2
     assert changes[0].pks == (1,)
     assert changes[1].pks == (2,)
+
+
+
+def test_updates_since_without_chronicle_enabled():
+    """updates_since on a table with no chronicle table raises ChronicleError, not sqlite3.OperationalError."""
+    db = Database(memory=True)
+    db["mysteries"].insert_all([{"id": 1, "name": "The Mary Celeste"}], pk="id")
+    with pytest.raises(ChronicleError):
+        list(updates_since(db.conn, "mysteries"))
+
+
+def test_updates_since_missing_table():
+    db = Database(memory=True)
+    with pytest.raises(ChronicleError):
+        list(updates_since(db.conn, "no_such_table"))
